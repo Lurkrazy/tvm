@@ -543,26 +543,24 @@ class DynamicGradientSearchTuner:
     def dynamic_gradient_search(self): #, log_file, task, init_size = 64, n_trials = 5, slide_window_size = 3):
         log_file = self.log_file
         task = self.task
-        
-        hardware_params = auto_scheduler.HardwareParams(target=task.target, max_vthread_extent=1)
-        new_task = auto_scheduler.SearchTask(
-            workload_key=task.workload_key,
-            target=task.target,
-            hardware_params=hardware_params,
-            layout_rewrite_option=task.layout_rewrite_option,
-            task_inputs=list(task.task_input_names),
-        )
-        task = new_task
-        self.task = task
         init_size = self.init_size
         n_trials = self.n_trials
         slide_window_size = self.slide_window_size
         
         if "cuda" in str(task.target):
             print(">>>>>>>>>>>>>>>> Start DGD_Search for CUDA <<<<<<<<<<<<<<<<")
-            print("apply DGD space and optimization")
+            print("apply loop permutation view for CUDA")
             self.isCUDA = True
-            # task.hardware_params.max_vthread_extent = 1
+            hardware_params = auto_scheduler.HardwareParams(target=task.target, max_vthread_extent=1)
+            new_task = auto_scheduler.SearchTask(
+                workload_key=task.workload_key,
+                target=task.target,
+                hardware_params=hardware_params,
+                layout_rewrite_option=task.layout_rewrite_option,
+                task_inputs=list(task.task_input_names),
+            )
+            task = new_task
+            self.task = task
         else:
             print(">>>>>>>>>>>>>>>> Start DGD_Search for CPU <<<<<<<<<<<<<<<<")
         
@@ -607,39 +605,9 @@ class DynamicGradientSearchTuner:
         
         # use topk as budget now, later will add more options like ntrials budget
         for ite, record in enumerate(topk_records):
-            print('size of topk_records: ', len(topk_records))
-            print("ite: ", ite)
+            
             while record != None:
                 print("current base: ", record)
-                
-                # print(f"base_input: {base_input}")
-                # print(f"base_input.state: {base_input.state}")
-                # print(f"base_input.task: {base_input.task}")
-                # print(f"base_input.task.compute_dag: {base_input.task.compute_dag}")
-                
-                # task_record = auto_scheduler._ffi_api.SerializeSearchTask(base_input.task)
-                # print(f"task_record: {task_record}")
-                # new_task = auto_scheduler._ffi_api.DeserializeSearchTask(task_record)
-                # print(f"new_task: {new_task}")
-
-                # print(f"base_result: {base_result}")
-                # # input("Press Enter to continue...")
-                
-                # all_neighbors = DGD_Search(record, 2)
-                # print(f"debug>> size of all_neighbors: {len(all_neighbors)}")
-                # neighbors_inputs = []
-                # for record_str in all_neighbors:
-                #     # get all 1+2 hops and predict/sorted by scores
-
-                #     inp, _ = auto_scheduler.measure_record.load_record_from_string(record_str)
-                #     neighbors_inputs.append(inp)
-                
-                # candidate_scores = self.model.predict(task, [x.state for x in neighbors_inputs])
-                # print(f"candidate_scores: {candidate_scores}")
-                
-                # # move to the next base
-                # record, measured_inputs, measured_results = DGD_Move(log_file, base_result, neighbors_inputs, candidate_scores, slide_window_size)
-                
                 record, measured_inputs, measured_results = self.DGD_Search(log_file, record, task, slide_window_size)
                 
                 if self.count_total_measured >= self.max_trials or time.time() - self.start_time >= self.max_tuning_time:
@@ -647,4 +615,19 @@ class DynamicGradientSearchTuner:
                 
                 # update the model with the new results
                 self.model.update(measured_inputs, measured_results)
-                
+
+        while self.count_total_measured < self.max_trials and time.time() - self.start_time < self.max_tuning_time:
+            # keep sampling
+            task, inputs, results = self.get_sample_records(log_file, 1, task)
+            record = auto_scheduler.measure_record.dump_record_to_string(inputs[0], results[0])
+            
+            self.model.update(inputs, results)
+            
+            while record != None:
+                print("current base: ", record)
+                record, measured_inputs, measured_results = self.DGD_Search(log_file, record, task, slide_window_size)
+                                
+                # update the model with the new results
+                self.model.update(measured_inputs, measured_results)
+        
+        return 
