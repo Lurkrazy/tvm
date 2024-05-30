@@ -24,55 +24,11 @@ import tvm
 from tvm import te, auto_scheduler
 from tvm.auto_scheduler.measure_record import load_records
 import json
-import json
 from itertools import combinations, product
 from math import isqrt
-
-# def get_factors(n):
-#     """
-#     Return the factors of a given number n as a sorted list.
-#     """
-#     factors = set()
-#     for i in range(1, isqrt(n) + 1):
-#         if n % i == 0:
-#             factors.add(i)
-#             factors.add(n // i)
-#     return sorted(factors)
-
-# def extract_coordinates(record):
-#     """
-#     Extract coordinates from the SP nodes in the record.
-#     """
-#     json_str = json.loads(record)
-#     idx_state = 1
-#     coordinates = []
-    
-#     for each in json_str['i'][idx_state][1]:
-#         if each[0] == "SP" and len(each[4]) == 1 and each[2] == 0:
-#             continue
-#         if each[0] == "SP":
-#             coordinates.extend(each[4])
-    
-#     return coordinates
-
-# def modify_sp_node(record, new_coordinates):
-#     """
-#     Modify the SP nodes in the record to match the new coordinates.
-#     """
-#     json_str = json.loads(record)
-#     idx_state = 1
-#     coord_idx = 0
-    
-#     for each in json_str['i'][idx_state][1]:
-#         if each[0] == "SP" and len(each[4]) == 1 and each[2] == 0:
-#             each[4] = [2]
-#             continue
-#         if each[0] == "SP":
-#             length = len(each[4])
-#             each[4] = new_coordinates[coord_idx:coord_idx + length]
-#             coord_idx += length
-    
-#     return json.dumps(json_str)
+import os
+import random
+import time
 
 class RecordProcessor:
     IDX_NODE_NAME = 0
@@ -105,12 +61,15 @@ class RecordProcessor:
         Extract coordinates from the SP nodes in the record.
         """
         coordinates = []
+        SP_count = 0
 
         for each in self.json_str['i'][self.IDX_STATE][1]:
-            if each[self.IDX_NODE_NAME] == "SP" and len(each[self.IDX_LENGTHS]) == 1 and each[self.IDX_ITER] == 0:
+            if each[self.IDX_NODE_NAME] == "SP" and len(each[self.IDX_LENGTHS]) == 1 and each[self.IDX_ITER] == 0 and SP_count != 0:
+                SP_count += 1
                 continue
             if each[self.IDX_NODE_NAME] == "SP":
                 coordinates.extend(each[self.IDX_LENGTHS])
+                SP_count += 1
 
         return coordinates
 
@@ -119,25 +78,28 @@ class RecordProcessor:
         Modify the SP nodes in the record to match the new coordinates.
         """
         coord_idx = 0
+        SP_count = 0
 
         for each in self.json_str['i'][self.IDX_STATE][1]:
-            if each[self.IDX_NODE_NAME] == "SP" and len(each[self.IDX_LENGTHS]) == 1 and each[self.IDX_ITER] == 0:
-                # # if loop extend is the multiple of 2, modify to [2]
+            if each[self.IDX_NODE_NAME] == "SP" and len(each[self.IDX_LENGTHS]) == 1 and each[self.IDX_ITER] == 0 and SP_count != 0:
+                # if loop extend is the multiple of 2, modify to [2]
                 # if each[self.IDX_LOOP_EXTENT] % 2 == 0:
                 #     each[self.IDX_LENGTHS] = [2]
+                SP_count += 1
                 continue
             if each[self.IDX_NODE_NAME] == "SP":
                 length = len(each[self.IDX_LENGTHS])
                 each[self.IDX_LENGTHS] = new_coordinates[coord_idx:coord_idx + length]
                 coord_idx += length
-            if each[self.IDX_NODE_NAME] == "PR":
-                # aggresive unroll
-                each[self.IDX_LOOP_EXTENT] = "auto_unroll_max_step$1024"
+                SP_count += 1
+            # if each[self.IDX_NODE_NAME] == "PR":
+            #     # aggresive unroll
+            #     each[self.IDX_LOOP_EXTENT] = "auto_unroll_max_step$1024"
 
         self.record = json.dumps(self.json_str)
 
 class DynamicGradientSearchTuner:
-    def __init__(self, task, log_file, n_trials=5, init_size=64, slide_window_size=3):
+    def __init__(self, task, log_file, n_trials=5, init_size=64, slide_window_size=3, max_trials = 1000, max_tuning_time=120):
         """
         Initialize the DynamicGradientSearch object.
 
@@ -161,7 +123,13 @@ class DynamicGradientSearchTuner:
         self.count_total_measured = 0
         self.visited = set()
         self.isCUDA = False
-        self.max_trials = 1000
+        self.max_trials = max_trials
+        self.max_tuning_time = max_tuning_time
+        self.start_time = time.time()
+        
+        if not os.path.exists(log_file):
+            with open(log_file, "w") as fp:
+                pass
 
     def get_sample_records(self, log_file, number, task):
         """Generate a list of random MeasureInput and MeasureResult pairs"""
@@ -170,7 +138,6 @@ class DynamicGradientSearchTuner:
         states = policy.sample_initial_population()
         states = states[:min(number, len(states))]
         
-        self.count_total_measured += len(states)
 
         inputs = [auto_scheduler.MeasureInput(task, s) for s in states]
         
@@ -196,6 +163,8 @@ class DynamicGradientSearchTuner:
         with open(log_file, "a") as fp:
             auto_scheduler.save_records(fp.name, inputs, mress)
 
+        self.count_total_measured += len(inputs)
+        
         return task, inputs, mress
 
 
@@ -209,7 +178,7 @@ class DynamicGradientSearchTuner:
         
         all_neighbors = states_1hop_record + states_2hop_record
         
-        # print(f"debug >> size of all_neighbors: {len(all_neighbors)}")
+        print(f"debug >> size of all_neighbors: {len(all_neighbors)}")
         
         candidate_inputs = [base_input]
         for record_str in all_neighbors:
@@ -225,7 +194,7 @@ class DynamicGradientSearchTuner:
         # move to the next base
         new_base, tmp_measured_inputs, tmp_measured_results = self.DGD_Move(log_file, base_result, base_score, candidate_inputs, candidate_scores, slide_window_size)\
         
-        if self.count_total_measured >= self.max_trials:
+        if self.count_total_measured >= self.max_trials or time.time() - self.start_time >= self.max_tuning_time:
             return new_base, measured_inputs, measured_results
         
         measured_inputs.extend(tmp_measured_inputs)
@@ -235,7 +204,7 @@ class DynamicGradientSearchTuner:
             # didn't find new base, then explore 3hop for the current base
             print(">>>> explore 3hop")
             all_neighbors = self.get_n_hop_neighbors(record, 3)
-            # print(f"debug >> size of states_3hop_record: {len(all_neighbors)}")
+            print(f"debug >> size of states_3hop_record: {len(all_neighbors)}")
             
             candidate_inputs = [base_input]
             for record_str in all_neighbors:
@@ -251,7 +220,7 @@ class DynamicGradientSearchTuner:
             
             new_base, tmp_measured_inputs, tmp_measured_results = self.DGD_Move(log_file, base_result, base_score, candidate_inputs, candidate_scores, slide_window_size)
             
-            if self.count_total_measured >= self.max_trials:
+            if self.count_total_measured >= self.max_trials or time.time() - self.start_time >= self.max_tuning_time:
                 return new_base, measured_inputs, measured_results
             
             measured_inputs.extend(tmp_measured_inputs)
@@ -260,6 +229,8 @@ class DynamicGradientSearchTuner:
         return new_base, measured_inputs, measured_results
 
     def DGD_Move(self, log_file, base_result, base_score, candidate_inputs, candidate_scores, slide_window_size):
+        print(">>>>>>>>>>>>>>>> Start DGD_Move <<<<<<<<<<<<<<<<")
+        print("number of candidates: ", len(candidate_inputs))
         assert len(candidate_inputs) == len(candidate_scores)
         
         score_threshold = base_score * 0.6
@@ -311,7 +282,7 @@ class DynamicGradientSearchTuner:
             
             
             # break after self.max_trials measurements
-            if self.count_total_measured + len(slide_window_inputs) >= self.max_trials:
+            if self.count_total_measured + len(slide_window_inputs) >= self.max_trials or time.time() - self.start_time >= self.max_tuning_time:
                 # need to save to the log_file
                 tmp_size = min(len(slide_window_inputs), self.max_trials - self.count_total_measured)
                 with open(log_file, "a") as fp:
@@ -393,8 +364,10 @@ class DynamicGradientSearchTuner:
                 new_coordinates = original_coordinates[:]
                 coord_idx = 0
                 valid_change = True  # Add a flag to ensure changes are valid
+                SP_count = 0
                 for each in processor.json_str['i'][processor.IDX_STATE][1]:
-                    if each[processor.IDX_NODE_NAME] == "SP" and len(each[processor.IDX_LENGTHS]) == 1 and each[processor.IDX_ITER] == 0:
+                    if each[processor.IDX_NODE_NAME] == "SP" and len(each[processor.IDX_LENGTHS]) == 1 and each[processor.IDX_ITER] == 0 and SP_count != 0:
+                        SP_count += 1
                         continue
                     if each[processor.IDX_NODE_NAME] == "SP":
                         length = len(each[processor.IDX_LENGTHS])
@@ -413,8 +386,14 @@ class DynamicGradientSearchTuner:
                                         valid_change = False
                                         break
                                 else:
-                                    valid_change = False
-                                    break
+                                    # random pick a factor, the init tiling might be a non-factor number
+                                    random_idx = random.randint(0, len(factors)-1)
+                                    if 0 <= random_idx < len(factors):
+                                        random_factor = factors[random_idx]
+                                        new_coordinates[idx] = random_factor
+                                    else:
+                                        valid_change = False
+                                        break
                                 if valid_change:
                                     if self.isCUDA and new_coordinates[coord_idx] != 1 and length >= 3:
                                         # Force the cuda code has no vthread on parallel dimensions
@@ -426,6 +405,7 @@ class DynamicGradientSearchTuner:
                                 valid_change = False
                                 break
                         coord_idx += length
+                        SP_count += 1
                 if valid_change and new_coordinates != original_coordinates:
                     modified_processor = RecordProcessor(json.dumps(processor.json_str))
                     modified_processor.modify_sp_node(new_coordinates)
@@ -567,7 +547,6 @@ class DynamicGradientSearchTuner:
         n_trials = self.n_trials
         slide_window_size = self.slide_window_size
         
-        count_total_measured = init_size
         if "cuda" in str(task.target):
             print(">>>>>>>>>>>>>>>> Start DGD_Search for CUDA <<<<<<<<<<<<<<<<")
             print("apply DGD space and optimization")
@@ -603,17 +582,17 @@ class DynamicGradientSearchTuner:
         
         list_costs = []
         records = []
-        topk = n_trials
+        topk = min(n_trials, len(inputs))
         for inp, res in zip(inputs, results):
             record_str = auto_scheduler.measure_record.dump_record_to_string(inp, res)
             costs = [v.value for v in res.costs]
             cost = np.mean(costs)
             list_costs.append(cost)
             records.append(record_str)
+            measured_throughputs_.append(1/cost)
 
         topk_indices = np.argsort(list_costs)[:topk]
         topk_records = [records[i] for i in topk_indices]
-        assert len(topk_records) == n_trials
         
         # use topk as budget now, later will add more options like ntrials budget
         for ite, record in enumerate(topk_records):
@@ -652,7 +631,7 @@ class DynamicGradientSearchTuner:
                 
                 record, measured_inputs, measured_results = self.DGD_Search(log_file, record, task, slide_window_size)
                 
-                if self.count_total_measured >= self.max_trials:
+                if self.count_total_measured >= self.max_trials or time.time() - self.start_time >= self.max_tuning_time:
                     return 
                 
                 # update the model with the new results
