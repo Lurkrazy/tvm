@@ -92,9 +92,9 @@ class RecordProcessor:
                 each[self.IDX_LENGTHS] = new_coordinates[coord_idx:coord_idx + length]
                 coord_idx += length
                 SP_count += 1
-            # if each[self.IDX_NODE_NAME] == "PR":
-            #     # aggresive unroll
-            #     each[self.IDX_LOOP_EXTENT] = "auto_unroll_max_step$1024"
+            if each[self.IDX_NODE_NAME] == "PR":
+                # aggresive unroll
+                each[self.IDX_LOOP_EXTENT] = "auto_unroll_max_step$1024"
 
         self.record = json.dumps(self.json_str)
 
@@ -543,6 +543,17 @@ class DynamicGradientSearchTuner:
     def dynamic_gradient_search(self): #, log_file, task, init_size = 64, n_trials = 5, slide_window_size = 3):
         log_file = self.log_file
         task = self.task
+        
+        hardware_params = auto_scheduler.HardwareParams(target=task.target, max_vthread_extent=1)
+        new_task = auto_scheduler.SearchTask(
+            workload_key=task.workload_key,
+            target=task.target,
+            hardware_params=hardware_params,
+            layout_rewrite_option=task.layout_rewrite_option,
+            task_inputs=list(task.task_input_names),
+        )
+        task = new_task
+        self.task = task
         init_size = self.init_size
         n_trials = self.n_trials
         slide_window_size = self.slide_window_size
@@ -551,10 +562,10 @@ class DynamicGradientSearchTuner:
             print(">>>>>>>>>>>>>>>> Start DGD_Search for CUDA <<<<<<<<<<<<<<<<")
             print("apply DGD space and optimization")
             self.isCUDA = True
-            task.hardware_params.max_vthread_extent = 1
+            # task.hardware_params.max_vthread_extent = 1
         else:
             print(">>>>>>>>>>>>>>>> Start DGD_Search for CPU <<<<<<<<<<<<<<<<")
-            
+        
         # use 1/exe_time as the throughput
         global measured_throughputs_
         measured_throughputs_ = []
