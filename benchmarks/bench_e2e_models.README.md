@@ -1,14 +1,15 @@
-# 1) 依赖
+# 1) Dependencies
 pip install "transformers>=4.41" accelerate sentencepiece
-# TVM 请按你本机编译安装（已含 Unity/Relax/MetaSchedule）
+# Please compile and install TVM on your machine (includes Unity/Relax/MetaSchedule)
 
-# 2) 跑默认全套（bs=1/4，seq_len=512，三种后端）
+# 2) Run the default full suite (bs=1/4, seq_len=512, three backends)
 python bench_e2e_models.py
 
-# 3) 指定序列长度 / 调优强度 / 只跑某些后端
+# 3) Specify sequence length / tuning trials / run specific backends only
 python bench_e2e_models.py --seq-len 128 --tvm-trials 20000 --modes pytorch torch_compile tvm_ms
 
-# 4) 换成你的 4090 目标名/或直接 cuda
+# 4) Switch to your 4090 target name / or use cuda directly
 python bench_e2e_models.py --tvm-target nvidia/geforce-rtx-4090
-# 或
+# Or
 python bench_e2e_models.py --tvm-target cuda
+

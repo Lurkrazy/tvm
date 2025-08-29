@@ -178,7 +178,7 @@ def main():
 
         for bs in args.batches:
             print(f"  - bs={bs}")
-            # 组输入
+            # Build input
             in_gpu = make_inputs(cfg, bs, args.seq_len, device=device)
 
             # 1) PyTorch eager
@@ -195,7 +195,7 @@ def main():
 
             # 3) TVM MetaSchedule
             if "tvm_ms" in args.modes:
-                # torch.export 目前最稳妥在 CPU 上执行导出
+                # torch.export is currently most stable when exporting on CPU
                 wrapper_cpu = wrapper.to("cpu")
                 in_cpu = tuple(x.to("cpu") for x in in_gpu)
                 with torch.no_grad():
@@ -205,7 +205,7 @@ def main():
 
             torch.cuda.empty_cache()
 
-    # 汇总 + 归一化（越小越好：取 PyTorch latency / X latency）
+    # Summary + normalization (smaller is better: take PyTorch latency / X latency)
     table = []
     for fam, kv in results.items():
         for bs in args.batches:
