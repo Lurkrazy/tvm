@@ -1,0 +1,1 @@
+python3 bench_ms_gemini.py --trials 20000 2>&1 | tee bench_ms_gemini.log

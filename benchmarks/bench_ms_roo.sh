@@ -1,0 +1,1 @@
+python3 bench_ms_roo.py 2>&1 | tee bench_ms_roo.log
