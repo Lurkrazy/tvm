@@ -24,7 +24,7 @@
 #ifndef TVM_RELAX_IR_EMIT_TE_H_
 #define TVM_RELAX_IR_EMIT_TE_H_
 
-#include <tvm/ffi/reflection/reflection.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/relax/expr.h>
 #include <tvm/te/operation.h>
 
@@ -52,7 +52,7 @@ class RXPlaceholderOpNode : public te::PlaceholderOpNode {
         .def_ro("dtype", &RXPlaceholderOpNode::dtype);
   }
 
-  static constexpr const char* _type_key = "RXPlaceholderOp";
+  static constexpr const char* _type_key = "relax.TEPlaceholderOp";
   TVM_DECLARE_FINAL_OBJECT_INFO(RXPlaceholderOpNode, te::PlaceholderOpNode);
 };
 

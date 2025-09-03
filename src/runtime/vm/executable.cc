@@ -22,6 +22,7 @@
  */
 
 #include <dmlc/memory_io.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/runtime/logging.h>
 #include <tvm/runtime/vm/executable.h>
 #include <tvm/runtime/vm/vm.h>
@@ -160,7 +161,7 @@ void LoadHeader(dmlc::Stream* strm) {
   STREAM_CHECK(version == VM_VERSION, "version");
 }
 
-void VMExecutable::SaveToBinary(dmlc::Stream* stream) {
+ffi::Bytes VMExecutable::SaveToBytes() const {
   std::string code;
   // Initialize the stream object.
   dmlc::MemoryStringStream strm(&code);
@@ -177,21 +178,16 @@ void VMExecutable::SaveToBinary(dmlc::Stream* stream) {
   // Code section.
   SaveCodeSection(&strm);
 
-  stream->Write(code);
+  return ffi::Bytes(code);
 }
 
-void VMExecutable::SaveToFile(const String& file_name, const String& format) {
-  std::string data;
-  dmlc::MemoryStringStream writer(&data);
-  dmlc::SeekStream* strm = &writer;
-  VMExecutable::SaveToBinary(strm);
-  runtime::SaveBinaryToFile(file_name, data);
+void VMExecutable::WriteToFile(const String& file_name, const String& format) const {
+  runtime::SaveBinaryToFile(file_name, VMExecutable::SaveToBytes());
 }
 
-Module VMExecutable::LoadFromBinary(void* stream) {
+ffi::Module VMExecutable::LoadFromBytes(const ffi::Bytes& bytes) {
   std::string code;
-  static_cast<dmlc::Stream*>(stream)->Read(&code);
-  dmlc::MemoryStringStream strm(&code);
+  dmlc::MemoryFixedSizeStream strm(const_cast<char*>(bytes.data()), bytes.size());
 
   ObjectPtr<VMExecutable> exec = make_object<VMExecutable>();
 
@@ -207,22 +203,21 @@ Module VMExecutable::LoadFromBinary(void* stream) {
   // Code section.
   exec->LoadCodeSection(&strm);
 
-  return Module(exec);
+  return ffi::Module(exec);
 }
 
-TVM_FFI_REGISTER_GLOBAL("runtime.module.loadbinary_relax.VMExecutable")
-    .set_body_typed(VMExecutable::LoadFromBinary);
-
-Module VMExecutable::LoadFromFile(const String& file_name) {
+ffi::Module VMExecutable::LoadFromFile(const String& file_name) {
   std::string data;
   runtime::LoadBinaryFromFile(file_name, &data);
-  dmlc::MemoryStringStream reader(&data);
-  dmlc::Stream* strm = &reader;
-  return VMExecutable::LoadFromBinary(reinterpret_cast<void*>(strm));
+  return VMExecutable::LoadFromBytes(ffi::Bytes(data));
 }
 
-TVM_FFI_REGISTER_GLOBAL("runtime.module.loadfile_relax.VMExecutable")
-    .set_body_typed(VMExecutable::LoadFromFile);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def("ffi.Module.load_from_file.relax.VMExecutable", VMExecutable::LoadFromFile)
+      .def("ffi.Module.load_from_bytes.relax.VMExecutable", VMExecutable::LoadFromBytes);
+});
 
 void VMFuncInfo::Save(dmlc::Stream* strm) const {
   int32_t temp_kind = static_cast<int32_t>(kind);
@@ -248,9 +243,9 @@ bool VMFuncInfo::Load(dmlc::Stream* strm) {
   return true;
 }
 
-void VMExecutable::SaveGlobalSection(dmlc::Stream* strm) { strm->Write(func_table); }
+void VMExecutable::SaveGlobalSection(dmlc::Stream* strm) const { strm->Write(func_table); }
 
-void VMExecutable::SaveConstantSection(dmlc::Stream* strm) {
+void VMExecutable::SaveConstantSection(dmlc::Stream* strm) const {
   strm->Write(static_cast<uint64_t>(this->constants.size()));
   for (const auto& it : this->constants) {
     if (auto opt_nd = it.as<runtime::NDArray>()) {
@@ -285,7 +280,7 @@ void VMExecutable::SaveConstantSection(dmlc::Stream* strm) {
   }
 }
 
-void VMExecutable::SaveCodeSection(dmlc::Stream* strm) {
+void VMExecutable::SaveCodeSection(dmlc::Stream* strm) const {
   strm->Write(instr_offset);
   strm->Write(instr_data);
 }
@@ -388,16 +383,16 @@ std::string RegNameToStr(RegName reg) {
   return "%" + std::to_string(reg);
 }
 
-Module VMExecutable::VMLoadExecutable() const {
+ffi::Module VMExecutable::VMLoadExecutable() const {
   ObjectPtr<VirtualMachine> vm = VirtualMachine::Create();
   vm->LoadExecutable(GetObjectPtr<VMExecutable>(const_cast<VMExecutable*>(this)));
-  return Module(vm);
+  return ffi::Module(vm);
 }
 
-Module VMExecutable::VMProfilerLoadExecutable() const {
+ffi::Module VMExecutable::VMProfilerLoadExecutable() const {
   ObjectPtr<VirtualMachine> vm = VirtualMachine::CreateProfiler();
   vm->LoadExecutable(GetObjectPtr<VMExecutable>(const_cast<VMExecutable*>(this)));
-  return Module(vm);
+  return ffi::Module(vm);
 }
 
 bool VMExecutable::HasFunction(const String& name) const { return func_map.count(name); }
@@ -557,7 +552,10 @@ String VMExecutable::AsPython() const {
   return String(os.str());
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.ExecutableLoadFromFile").set_body_typed(VMExecutable::LoadFromFile);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.ExecutableLoadFromFile", VMExecutable::LoadFromFile);
+});
 
 }  // namespace vm
 }  // namespace runtime

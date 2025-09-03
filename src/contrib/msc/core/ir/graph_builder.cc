@@ -23,6 +23,8 @@
 
 #include "graph_builder.h"
 
+#include <tvm/ffi/reflection/registry.h>
+
 #include <algorithm>
 #include <set>
 
@@ -166,7 +168,7 @@ const MSCGraph GraphBuilder::Build(const Function& func) {
       continue;
     }
     if (func_params_.count(p) && func_params_[p]->IsInstance<TupleNode>()) {
-      const auto& tuple = Downcast<Tuple>(func_params_[p]);
+      const auto& tuple = Downcast<relax::Tuple>(func_params_[p]);
       Array<String> tuple_names;
       for (const auto& f : tuple->fields) {
         if (expr_tensor_map_.count(f)) {
@@ -340,7 +342,7 @@ const MSCJoint GraphBuilder::AddNode(const Expr& expr, const Optional<Expr>& bin
     if (const auto* v_node = call_node->op.as<GlobalVarNode>()) {
       const auto& func = Downcast<Function>(ref_module_->Lookup(v_node->name_hint));
       const auto& name_opt = func->GetAttr<String>(relax::attr::kComposite);
-      if (name_opt.defined()) {
+      if (name_opt.has_value()) {
         attrs = FuncAttrGetter().GetAttrs(func);
       }
     } else if (call_node->op->IsInstance<VarNode>()) {
@@ -733,7 +735,7 @@ void GraphBuilder::VisitBinding_(const VarBindingNode* binding, const CallNode* 
 void GraphBuilder::VisitBinding_(const VarBindingNode* binding, const TupleNode* val) {
   ExprVisitor::VisitBinding_(binding, val);
   const String& name = config_.use_var_name ? binding->var->name_hint() : "";
-  AddNode(GetRef<Tuple>(val), binding->var, name);
+  AddNode(GetRef<relax::Tuple>(val), binding->var, name);
 }
 
 void GraphBuilder::VisitBinding_(const VarBindingNode* binding, const TupleGetItemNode* val) {
@@ -758,7 +760,7 @@ void GraphBuilder::VisitBinding_(const VarBindingNode* binding, const DataflowVa
 
 void GraphBuilder::VisitBinding_(const VarBindingNode* binding, const FunctionNode* val) {
   const auto& name_opt = val->GetAttr<String>(relax::attr::kComposite);
-  ICHECK(name_opt.defined()) << "Unexpected target func without composite";
+  ICHECK(name_opt.has_value()) << "Unexpected target func without composite";
   ICHECK(config_.target.size() > 0 && StringUtils::StartsWith(name_opt.value(), config_.target))
       << "Target should be given for target function";
   target_funcs_.Set(binding->var, GetRef<Function>(val));
@@ -768,18 +770,18 @@ const std::tuple<String, String, String> GraphBuilder::ParseFunc(const Function&
   String node_name, optype, layout;
   const auto& name_opt = func->GetAttr<String>(msc_attr::kUnique);
   // get node_name
-  if (name_opt.defined()) {
+  if (name_opt.has_value()) {
     node_name = name_opt.value();
   }
   // get optype
   const auto& codegen_opt = func->GetAttr<String>(relax::attr::kCodegen);
   const auto& optype_opt = func->GetAttr<String>(msc_attr::kOptype);
   const auto& composite_opt = func->GetAttr<String>(relax::attr::kComposite);
-  if (codegen_opt.defined()) {
+  if (codegen_opt.has_value()) {
     optype = codegen_opt.value();
-  } else if (optype_opt.defined()) {
+  } else if (optype_opt.has_value()) {
     optype = optype_opt.value();
-  } else if (composite_opt.defined()) {
+  } else if (composite_opt.has_value()) {
     optype = composite_opt.value();
     if (config_.target.size() > 0) {
       optype = StringUtils::Replace(composite_opt.value(), config_.target + ".", "");
@@ -787,7 +789,7 @@ const std::tuple<String, String, String> GraphBuilder::ParseFunc(const Function&
   }
   // get layout
   const auto& layout_opt = func->GetAttr<String>(msc_attr::kLayout);
-  if (layout_opt.defined()) {
+  if (layout_opt.has_value()) {
     layout = layout_opt.value();
   }
   return std::make_tuple(node_name, optype, layout);
@@ -804,7 +806,7 @@ Array<Expr> GraphBuilder::GetPluginInputs(const Expr& expr) {
   ICHECK(expr->IsInstance<CallNode>()) << "plugin expr should be call";
   const auto& call = Downcast<Call>(expr);
   ICHECK(call->args[1]->IsInstance<TupleNode>()) << "plugin argument 1 should be call";
-  return Downcast<Tuple>(call->args[1])->fields;
+  return Downcast<relax::Tuple>(call->args[1])->fields;
 }
 
 Map<MSCTensor, NDArray> WeightsExtractor::GetWeights(const Function& func) {
@@ -834,22 +836,24 @@ void WeightsExtractor::VisitExpr_(const CallNode* op) {
   }
 }
 
-TVM_FFI_REGISTER_GLOBAL("msc.core.BuildFromRelax")
-    .set_body_typed([](const IRModule& module, const String& entry_name,
-                       const String& options) -> MSCGraph {
-      auto builder = GraphBuilder(module, entry_name, options);
-      const auto& func_name =
-          builder.config().byoc_entry.size() > 0 ? String(builder.config().byoc_entry) : entry_name;
-      const auto& func = Downcast<Function>(module->Lookup(func_name));
-      return builder.Build(func);
-    });
-
-TVM_FFI_REGISTER_GLOBAL("msc.core.GetRelaxWeights")
-    .set_body_typed([](const IRModule& module,
-                       const String& entry_name) -> Map<MSCTensor, NDArray> {
-      const auto& func = Downcast<Function>(module->Lookup(entry_name));
-      return WeightsExtractor(module).GetWeights(func);
-    });
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def("msc.core.BuildFromRelax",
+           [](const IRModule& module, const String& entry_name, const String& options) -> MSCGraph {
+             auto builder = GraphBuilder(module, entry_name, options);
+             const auto& func_name = builder.config().byoc_entry.size() > 0
+                                         ? String(builder.config().byoc_entry)
+                                         : entry_name;
+             const auto& func = Downcast<Function>(module->Lookup(func_name));
+             return builder.Build(func);
+           })
+      .def("msc.core.GetRelaxWeights",
+           [](const IRModule& module, const String& entry_name) -> Map<MSCTensor, NDArray> {
+             const auto& func = Downcast<Function>(module->Lookup(entry_name));
+             return WeightsExtractor(module).GetWeights(func);
+           });
+});
 
 }  // namespace msc
 }  // namespace contrib

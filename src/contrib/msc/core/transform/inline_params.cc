@@ -22,6 +22,7 @@
  * \brief Pass for inline Exprs.
  */
 
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/relax/expr.h>
 #include <tvm/relax/expr_functor.h>
 #include <tvm/relax/transform.h>
@@ -62,7 +63,7 @@ class ParamsInliner : public ExprMutator {
           }
           if (struct_info->IsInstance<FuncStructInfoNode>()) {
             const auto& optype_opt = func->GetAttr<String>(msc_attr::kOptype);
-            ICHECK(optype_opt.defined())
+            ICHECK(optype_opt.has_value())
                 << "Can not find attr " << msc_attr::kOptype << " form extern func";
             extern_types_.Set(p, optype_opt.value());
             continue;
@@ -184,7 +185,10 @@ Pass InlineParams(const String& entry_name) {
   return CreateModulePass(pass_func, 0, "InlineParams", {});
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.transform.InlineParams").set_body_typed(InlineParams);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.transform.InlineParams", InlineParams);
+});
 
 }  // namespace transform
 }  // namespace relax

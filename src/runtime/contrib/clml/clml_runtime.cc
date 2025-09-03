@@ -23,6 +23,8 @@
  */
 #include "clml_runtime.h"
 
+#include <tvm/ffi/reflection/registry.h>
+
 #include <unordered_map>
 
 #ifdef TVM_GRAPH_EXECUTOR_CLML
@@ -191,7 +193,7 @@ class CLMLRuntime : public JSONRuntimeBase {
    *
    * \return module type key.
    */
-  const char* type_key() const override { return "clml"; }
+  const char* kind() const override { return "clml"; }
 
   /*!
    * \brief Initialize runtime. Create CLML layer from JSON
@@ -1824,15 +1826,18 @@ class CLMLRuntime : public JSONRuntimeBase {
   std::string clml_symbol;
 };
 
-runtime::Module CLMLRuntimeCreate(const String& symbol_name, const String& graph_json,
-                                  const Array<String>& const_names) {
+ffi::Module CLMLRuntimeCreate(const String& symbol_name, const String& graph_json,
+                              const Array<String>& const_names) {
   auto n = make_object<CLMLRuntime>(symbol_name, graph_json, const_names);
-  return runtime::Module(n);
+  return ffi::Module(n);
 }
 
-TVM_FFI_REGISTER_GLOBAL("runtime.clml_runtime_create").set_body_typed(CLMLRuntimeCreate);
-TVM_FFI_REGISTER_GLOBAL("runtime.module.loadbinary_clml")
-    .set_body_typed(JSONRuntimeBase::LoadFromBinary<CLMLRuntime>);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def("runtime.clml_runtime_create", CLMLRuntimeCreate)
+      .def("ffi.Module.load_from_bytes.clml", JSONRuntimeBase::LoadFromBytes<CLMLRuntime>);
+});
 }  //  namespace contrib
 }  //  namespace runtime
 }  //  namespace tvm

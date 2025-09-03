@@ -23,7 +23,7 @@
 #include <tvm/ffi/container/map.h>
 #include <tvm/ffi/function.h>
 #include <tvm/ffi/optional.h>
-#include <tvm/ffi/reflection/reflection.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/ffi/string.h>
 #include <tvm/ir/expr.h>
 #include <tvm/ir/module.h>
@@ -31,7 +31,6 @@
 #include <tvm/meta_schedule/runner.h>
 #include <tvm/meta_schedule/search_strategy.h>
 #include <tvm/meta_schedule/space_generator.h>
-#include <tvm/node/reflection.h>
 #include <tvm/runtime/object.h>
 #include <tvm/support/random_engine.h>
 #include <tvm/target/target.h>

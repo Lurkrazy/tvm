@@ -22,6 +22,7 @@
 #endif
 #include <picojson.h>
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/runtime/data_type.h>
 #include <tvm/runtime/disco/builtin.h>
 #include <tvm/runtime/vm/ndarray_cache_support.h>
@@ -116,7 +117,7 @@ class ShardLoaderObj : public Object {
  public:
   /*! \brief Create a shard loader. */
   static ObjectRef Create(const std::string& path_to_metadata, const std::string& metadata,
-                          std::string shard_info, Module mod);
+                          std::string shard_info, Optional<ffi::Module> mod);
   /*! \brief Load the i-th parameter */
   NDArray Load(int weight_index) const;
 
@@ -173,14 +174,11 @@ class ShardLoaderObj : public Object {
   NDArray LoadDirect(int weight_index) const;
 };
 
-TVM_REGISTER_OBJECT_TYPE(ShardLoaderObj);
-
 ObjectRef ShardLoaderObj::Create(const std::string& path_to_metadata, const std::string& metadata,
-                                 std::string shard_info, Module mod) {
-  if (shard_info.empty() && mod.defined()) {
-    if (ffi::Function get_shard_info = mod->GetFunction("get_shard_info");
-        get_shard_info != nullptr) {
-      shard_info = get_shard_info().cast<String>();
+                                 std::string shard_info, Optional<ffi::Module> mod) {
+  if (shard_info.empty() && mod.has_value()) {
+    if (auto get_shard_info = (*mod)->GetFunction("get_shard_info")) {
+      shard_info = (*get_shard_info)().cast<String>();
     }
   }
   ObjectPtr<ShardLoaderObj> n = make_object<ShardLoaderObj>();
@@ -196,9 +194,9 @@ ObjectRef ShardLoaderObj::Create(const std::string& path_to_metadata, const std:
       ShardInfo& shard_info = shards[name];
       for (const ShardInfo::ShardFunc& shard_func : shard_info.funcs) {
         const std::string& name = shard_func.name;
-        if (ffi::Function f = mod.defined() ? mod->GetFunction(name, true) : nullptr;
-            f != nullptr) {
-          n->shard_funcs_[name] = f;
+        if (Optional<ffi::Function> f =
+                mod.has_value() ? (*mod)->GetFunction(name, true) : std::nullopt) {
+          n->shard_funcs_[name] = *f;
         } else if (const auto f = tvm::ffi::Function::GetGlobal(name)) {
           n->shard_funcs_[name] = *f;
         } else {
@@ -405,45 +403,46 @@ Array<NDArray> ShardLoaderObj::LoadAllPresharded() const {
   return params;
 }
 
-TVM_FFI_REGISTER_GLOBAL("runtime.disco.ShardLoader").set_body_typed(ShardLoaderObj::Create);
-TVM_FFI_REGISTER_GLOBAL("runtime.disco.ShardLoaderLoad")
-    .set_body_typed([](ObjectRef loader_obj, ffi::Shape weight_index) {
-      const auto* loader = loader_obj.as<ShardLoaderObj>();
-      CHECK(loader != nullptr) << "TypeError: Expected ShardLoaderObj, but gets: "
-                               << loader_obj->GetTypeKey();
-      return loader->Load(IntegerFromShape(weight_index));
-    });
-TVM_FFI_REGISTER_GLOBAL("runtime.disco.ShardLoaderLoadPresharded")
-    .set_body_typed([](ObjectRef loader_obj, ffi::Shape weight_index) {
-      const auto* loader = loader_obj.as<ShardLoaderObj>();
-      CHECK(loader != nullptr) << "TypeError: Expected ShardLoaderObj, but gets: "
-                               << loader_obj->GetTypeKey();
-      return loader->LoadPresharded(IntegerFromShape(weight_index));
-    });
-
-TVM_FFI_REGISTER_GLOBAL("runtime.disco.ShardLoaderLoadAll")
-    .set_body_typed([](ObjectRef loader_obj) {
-      const auto* loader = loader_obj.as<ShardLoaderObj>();
-      CHECK(loader != nullptr) << "TypeError: Expected ShardLoaderObj, but gets: "
-                               << loader_obj->GetTypeKey();
-      return loader->LoadAll();
-    });
-
-TVM_FFI_REGISTER_GLOBAL("runtime.disco.ShardLoaderLoadAllPresharded")
-    .set_body_typed([](ObjectRef loader_obj) {
-      const auto* loader = loader_obj.as<ShardLoaderObj>();
-      CHECK(loader != nullptr) << "TypeError: Expected ShardLoaderObj, but gets: "
-                               << loader_obj->GetTypeKey();
-      return loader->LoadAllPresharded();
-    });
-
-TVM_FFI_REGISTER_GLOBAL("runtime.disco.ShardLoaderLoadParamOnWorker0")
-    .set_body_typed([](ObjectRef loader_obj, int param_index) {
-      const auto* loader = loader_obj.as<ShardLoaderObj>();
-      CHECK(loader != nullptr) << "TypeError: Expected ShardLoaderObj, but gets: "
-                               << loader_obj->GetTypeKey();
-      return loader->LoadParamOnWorker0(param_index);
-    });
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def("runtime.disco.ShardLoader", ShardLoaderObj::Create)
+      .def("runtime.disco.ShardLoaderLoad",
+           [](ObjectRef loader_obj, ffi::Shape weight_index) {
+             const auto* loader = loader_obj.as<ShardLoaderObj>();
+             CHECK(loader != nullptr)
+                 << "TypeError: Expected ShardLoaderObj, but gets: " << loader_obj->GetTypeKey();
+             return loader->Load(IntegerFromShape(weight_index));
+           })
+      .def("runtime.disco.ShardLoaderLoadPresharded",
+           [](ObjectRef loader_obj, ffi::Shape weight_index) {
+             const auto* loader = loader_obj.as<ShardLoaderObj>();
+             CHECK(loader != nullptr)
+                 << "TypeError: Expected ShardLoaderObj, but gets: " << loader_obj->GetTypeKey();
+             return loader->LoadPresharded(IntegerFromShape(weight_index));
+           })
+      .def("runtime.disco.ShardLoaderLoadAll",
+           [](ObjectRef loader_obj) {
+             const auto* loader = loader_obj.as<ShardLoaderObj>();
+             CHECK(loader != nullptr)
+                 << "TypeError: Expected ShardLoaderObj, but gets: " << loader_obj->GetTypeKey();
+             return loader->LoadAll();
+           })
+      .def("runtime.disco.ShardLoaderLoadAllPresharded",
+           [](ObjectRef loader_obj) {
+             const auto* loader = loader_obj.as<ShardLoaderObj>();
+             CHECK(loader != nullptr)
+                 << "TypeError: Expected ShardLoaderObj, but gets: " << loader_obj->GetTypeKey();
+             return loader->LoadAllPresharded();
+           })
+      .def("runtime.disco.ShardLoaderLoadParamOnWorker0",
+           [](ObjectRef loader_obj, int param_index) {
+             const auto* loader = loader_obj.as<ShardLoaderObj>();
+             CHECK(loader != nullptr)
+                 << "TypeError: Expected ShardLoaderObj, but gets: " << loader_obj->GetTypeKey();
+             return loader->LoadParamOnWorker0(param_index);
+           });
+});
 
 }  // namespace runtime
 }  // namespace tvm

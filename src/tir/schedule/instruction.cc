@@ -16,6 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+#include <tvm/ffi/reflection/registry.h>
+
 #include "./utils.h"
 
 namespace tvm {
@@ -68,11 +70,11 @@ TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
       for (const Any& obj : self->inputs) {
         if (obj == nullptr) {
           inputs.push_back(String("None"));
+        } else if (auto opt_str = obj.as<ffi::String>()) {
+          inputs.push_back(String('"' + (*opt_str).operator std::string() + '"'));
         } else if (obj.as<BlockRVNode>() || obj.as<LoopRVNode>()) {
           inputs.push_back(String("_"));
-        } else if (const auto* str_obj = obj.as<ffi::StringObj>()) {
-          inputs.push_back(String('"' + std::string(str_obj->data) + '"'));
-        } else if (obj.type_index() < ffi::TypeIndex::kTVMFFIStaticObjectBegin) {
+        } else if (obj.type_index() < ffi::TypeIndex::kTVMFFISmallStr) {
           inputs.push_back(obj);
         } else if (obj.as<IntImmNode>() || obj.as<FloatImmNode>()) {
           inputs.push_back(obj);
@@ -102,15 +104,14 @@ TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
 
 /**************** FFI ****************/
 
-TVM_REGISTER_NODE_TYPE(InstructionNode);
-TVM_REGISTER_NODE_TYPE(InstructionKindNode);
-
-TVM_FFI_REGISTER_GLOBAL("tir.schedule.InstructionKindGet").set_body_typed(InstructionKind::Get);
-TVM_FFI_REGISTER_GLOBAL("tir.schedule.Instruction")
-    .set_body_typed([](InstructionKind kind, Array<Any> inputs, Array<Any> attrs,
-                       Array<Any> outputs) -> Instruction {
-      return Instruction(kind, inputs, attrs, outputs);
-    });
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def("tir.schedule.InstructionKindGet", InstructionKind::Get)
+      .def("tir.schedule.Instruction",
+           [](InstructionKind kind, Array<Any> inputs, Array<Any> attrs, Array<Any> outputs)
+               -> Instruction { return Instruction(kind, inputs, attrs, outputs); });
+});
 
 }  // namespace tir
 }  // namespace tvm

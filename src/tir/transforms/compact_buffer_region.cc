@@ -24,6 +24,7 @@
 
 #include <tvm/arith/int_set.h>
 #include <tvm/arith/int_solver.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/tir/op.h>
 #include <tvm/tir/stmt_functor.h>
 #include <tvm/tir/transform.h>
@@ -414,7 +415,6 @@ class BufferAccessRegionCollector : public StmtExprVisitor {
     if (iter->iter_type != IterVarType::kThreadIndex) {
       return false;
     }
-    ICHECK(iter->thread_tag.defined());
     // When there is warp memory
     // threadIdx.x must be set to be warp index.
     return CanRelaxStorageUnderThread(scope, runtime::ThreadScope::Create((iter->thread_tag)));
@@ -756,8 +756,10 @@ Pass CompactBufferAllocation(bool is_strict) {
   return CreatePrimFuncPass(pass_func, 0, "tir.CompactBufferAllocation", {});
 }
 
-TVM_FFI_REGISTER_GLOBAL("tir.transform.CompactBufferAllocation")
-    .set_body_typed(CompactBufferAllocation);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("tir.transform.CompactBufferAllocation", CompactBufferAllocation);
+});
 }  // namespace transform
 
 }  // namespace tir

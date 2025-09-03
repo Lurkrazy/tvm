@@ -21,6 +21,7 @@
  * \file tvm/relax/transform/meta_schedule.cc
  * \brief Pass for meta_schedule tuning
  */
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/meta_schedule/database.h>
 #include <tvm/relax/transform.h>
 #include <tvm/tir/transform.h>
@@ -83,7 +84,7 @@ Pass MetaScheduleApplyDatabase(Optional<String> work_dir, bool enable_warning = 
     if (Database::Current().defined()) {
       database = Database::Current().value();
     } else {
-      ICHECK(work_dir.defined());
+      ICHECK(work_dir.has_value());
       String path_workload = work_dir.value() + "/database_workload.json";
       String path_tuning_record = work_dir.value() + "/database_tuning_record.json";
       LOG(WARNING) << "Creating JSONDatabase. Workload at: " << path_workload
@@ -175,11 +176,13 @@ Pass MetaScheduleTuneTIR(String work_dir, Integer max_trials_global) {
                                             /*traceable*/ true);
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.transform.MetaScheduleApplyDatabase")
-    .set_body_typed(MetaScheduleApplyDatabase);
-TVM_FFI_REGISTER_GLOBAL("relax.transform.MetaScheduleTuneIRMod")
-    .set_body_typed(MetaScheduleTuneIRMod);
-TVM_FFI_REGISTER_GLOBAL("relax.transform.MetaScheduleTuneTIR").set_body_typed(MetaScheduleTuneTIR);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def("relax.transform.MetaScheduleApplyDatabase", MetaScheduleApplyDatabase)
+      .def("relax.transform.MetaScheduleTuneIRMod", MetaScheduleTuneIRMod)
+      .def("relax.transform.MetaScheduleTuneTIR", MetaScheduleTuneTIR);
+});
 }  // namespace transform
 }  // namespace relax
 }  // namespace tvm

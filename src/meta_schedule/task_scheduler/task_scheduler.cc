@@ -16,6 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+#include <tvm/ffi/reflection/registry.h>
+
 #include "../utils.h"
 
 namespace tvm {
@@ -69,7 +71,7 @@ void SendToRunner(TaskRecordNode* self, const Runner& runner) {
   for (int i = 0; i < n; ++i) {
     const MeasureCandidate& candidate = candidates[i];
     const BuilderResult& builder_result = builder_results[i];
-    if (builder_result->error_msg.defined()) {
+    if (builder_result->error_msg.has_value()) {
       ++n_build_errors;
       continue;
     }
@@ -86,7 +88,7 @@ void SendToRunner(TaskRecordNode* self, const Runner& runner) {
   results.reserve(n);
   for (int i = 0, j = 0; i < n; ++i) {
     const BuilderResult& builder_result = builder_results[i];
-    if (builder_result->error_msg.defined()) {
+    if (builder_result->error_msg.has_value()) {
       results.push_back(RunnerFuture(
           /*f_done=*/[]() -> bool { return true; },
           /*f_result=*/
@@ -127,7 +129,7 @@ void TaskCleanUp(TaskRecordNode* self, int task_id, const Array<RunnerResult>& r
       TVM_PY_LOG(INFO, logger) << std::fixed << std::setprecision(4)  //
                                << "[Task #" << task_id << ": " << name << "] Trial #" << trials
                                << ": Error in "
-                               << (builder_result->error_msg.defined() ? "building" : "running")
+                               << (builder_result->error_msg.has_value() ? "building" : "running")
                                << ":\n"
                                << err << "\n"
                                << sch->mod() << "\n"
@@ -367,23 +369,18 @@ void PyTaskSchedulerNode::Tune(Array<TuneContext> tasks, Array<FloatImm> task_we
   }
 }
 
-TVM_REGISTER_NODE_TYPE(TaskRecordNode);
-TVM_REGISTER_OBJECT_TYPE(TaskSchedulerNode);
-TVM_REGISTER_NODE_TYPE(PyTaskSchedulerNode);
-TVM_FFI_REGISTER_GLOBAL("meta_schedule.TaskSchedulerPyTaskScheduler")
-    .set_body_typed(TaskScheduler::PyTaskScheduler);
-TVM_FFI_REGISTER_GLOBAL("meta_schedule.TaskSchedulerTune")
-    .set_body_method(&TaskSchedulerNode::Tune);
-TVM_FFI_REGISTER_GLOBAL("meta_schedule.TaskSchedulerJoinRunningTask")
-    .set_body_method(&TaskSchedulerNode::JoinRunningTask);
-TVM_FFI_REGISTER_GLOBAL("meta_schedule.TaskSchedulerNextTaskId")
-    .set_body_method(&TaskSchedulerNode::NextTaskId);
-TVM_FFI_REGISTER_GLOBAL("meta_schedule.TaskSchedulerTerminateTask")
-    .set_body_method(&TaskSchedulerNode::TerminateTask);
-TVM_FFI_REGISTER_GLOBAL("meta_schedule.TaskSchedulerTouchTask")
-    .set_body_method(&TaskSchedulerNode::TouchTask);
-TVM_FFI_REGISTER_GLOBAL("meta_schedule.TaskSchedulerPrintTuningStatistics")
-    .set_body_method(&TaskSchedulerNode::PrintTuningStatistics);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def("meta_schedule.TaskSchedulerPyTaskScheduler", TaskScheduler::PyTaskScheduler)
+      .def_method("meta_schedule.TaskSchedulerTune", &TaskSchedulerNode::Tune)
+      .def_method("meta_schedule.TaskSchedulerJoinRunningTask", &TaskSchedulerNode::JoinRunningTask)
+      .def_method("meta_schedule.TaskSchedulerNextTaskId", &TaskSchedulerNode::NextTaskId)
+      .def_method("meta_schedule.TaskSchedulerTerminateTask", &TaskSchedulerNode::TerminateTask)
+      .def_method("meta_schedule.TaskSchedulerTouchTask", &TaskSchedulerNode::TouchTask)
+      .def_method("meta_schedule.TaskSchedulerPrintTuningStatistics",
+                  &TaskSchedulerNode::PrintTuningStatistics);
+});
 
 }  // namespace meta_schedule
 }  // namespace tvm

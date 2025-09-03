@@ -80,8 +80,10 @@ The following example registers PackedFunc in C++ and calls from python.
 .. code:: c
 
     // register a global packed function in c++
-    TVM_FFI_REGISTER_GLOBAL("myadd")
-    .set_body_packed(MyAdd);
+    TVM_FFI_STATIC_INIT_BLOCK({
+      namespace refl = tvm::ffi::reflection;
+      refl::GlobalDef().def_packed("myadd", MyAdd);
+    });
 
 .. code:: python
 
@@ -110,10 +112,12 @@ we can pass functions from python (as PackedFunc) to C++.
 
 .. code:: c
 
-    TVM_FFI_REGISTER_GLOBAL("callhello")
-    .set_body_packed([](ffi::PackedArgs args, ffi::Any* rv) {
-      PackedFunc f = args[0];
-      f("hello world");
+    TVM_FFI_STATIC_INIT_BLOCK({
+      namespace refl = tvm::ffi::reflection;
+      refl::GlobalDef().def_packed("callhello", [](ffi::PackedArgs args, ffi::Any* rv) {
+        ffi::Function f = args[0].cast<ffi::Function>();
+        f("hello world");
+      });
     });
 
 .. code:: python
@@ -222,15 +226,6 @@ Each ``Object`` subclass will override this to register its members. Here is an 
     static void RegisterReflection() {
       namespace refl = tvm::ffi::reflection;
       refl::ObjectDef<IntImmNode>().def_ro("value", &IntImmNode::value);
-    }
-
-    bool SEqualReduce(const IntImmNode* other, SEqualReducer equal) const {
-      return equal(dtype, other->dtype) && equal(value, other->value);
-    }
-
-    void SHashReduce(SHashReducer hash_reduce) const {
-      hash_reduce(dtype);
-      hash_reduce(value);
     }
 
     static constexpr const char* _type_key = "ir.IntImm";

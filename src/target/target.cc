@@ -22,6 +22,7 @@
  */
 #include <dmlc/thread_local.h>
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/transform.h>
 #include <tvm/runtime/device_api.h>
 #include <tvm/runtime/logging.h>
@@ -43,8 +44,6 @@
 namespace tvm {
 
 TVM_FFI_STATIC_INIT_BLOCK({ TargetNode::RegisterReflection(); });
-
-TVM_REGISTER_NODE_TYPE(TargetNode);
 
 class TargetInternal {
  public:
@@ -430,7 +429,7 @@ Any TargetInternal::ParseType(const Any& obj, const TargetKindNode::ValueTypeInf
       return Target(TargetInternal::FromString(str.value()));
     } else if (const auto* ptr = obj.as<ffi::MapObj>()) {
       for (const auto& kv : *ptr) {
-        if (!kv.first.as<ffi::StringObj>()) {
+        if (!kv.first.as<ffi::String>()) {
           TVM_FFI_THROW(TypeError)
               << "Target object requires key of dict to be str, but get: " << kv.first.GetTypeKey();
         }
@@ -443,16 +442,16 @@ Any TargetInternal::ParseType(const Any& obj, const TargetKindNode::ValueTypeInf
   } else if (info.type_index == ffi::ArrayObj::RuntimeTypeIndex()) {
     // Parsing array
     const auto* array = ObjTypeCheck<const ffi::ArrayObj*>(obj, "Array");
-    std::vector<ObjectRef> result;
+    std::vector<Any> result;
     for (const Any& e : *array) {
       try {
-        result.push_back(TargetInternal::ParseType(e, *info.key).cast<ObjectRef>());
+        result.push_back(TargetInternal::ParseType(e, *info.key));
       } catch (const Error& e) {
         std::string index = '[' + std::to_string(result.size()) + ']';
         throw Error(e.kind(), index + e.message(), e.traceback());
       }
     }
-    return Array<ObjectRef>(result);
+    return Array<Any>(result);
   } else if (info.type_index == ffi::MapObj::RuntimeTypeIndex()) {
     // Parsing map
     const auto* map = ObjTypeCheck<const ffi::MapObj*>(obj, "Map");
@@ -707,19 +706,6 @@ String TargetNode::ToDebugString() const {
   }
   os << ")";
   return os.str();
-}
-
-bool TargetNode::SEqualReduce(const TargetNode* other, SEqualReducer equal) const {
-  return equal(kind.get(), other->kind.get()) && equal(host, other->host) &&
-         equal(tag, other->tag) && equal(keys, other->keys) && equal(attrs, other->attrs);
-}
-
-void TargetNode::SHashReduce(SHashReducer hash_reduce) const {
-  hash_reduce(kind.get());
-  hash_reduce(host);
-  hash_reduce(tag);
-  hash_reduce(keys);
-  hash_reduce(attrs);
 }
 
 /*! \brief Entry to hold the Target context stack. */
@@ -1010,23 +996,25 @@ std::unordered_map<String, ffi::Any> TargetInternal::QueryDevice(int device_id,
 
 /**********  Registry  **********/
 
-TVM_FFI_REGISTER_GLOBAL("target.Target").set_body_packed(TargetInternal::ConstructorDispatcher);
-TVM_FFI_REGISTER_GLOBAL("target.TargetEnterScope").set_body_typed(TargetInternal::EnterScope);
-TVM_FFI_REGISTER_GLOBAL("target.TargetExitScope").set_body_typed(TargetInternal::ExitScope);
-TVM_FFI_REGISTER_GLOBAL("target.TargetCurrent").set_body_typed(Target::Current);
-TVM_FFI_REGISTER_GLOBAL("target.TargetExport").set_body_typed(TargetInternal::Export);
-TVM_FFI_REGISTER_GLOBAL("target.WithHost").set_body_typed(TargetInternal::WithHost);
-TVM_FFI_REGISTER_GLOBAL("target.TargetGetDeviceType").set_body_typed([](const Target& target) {
-  return target->GetTargetDeviceType();
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def_packed("target.Target", TargetInternal::ConstructorDispatcher)
+      .def("target.TargetEnterScope", TargetInternal::EnterScope)
+      .def("target.TargetExitScope", TargetInternal::ExitScope)
+      .def("target.TargetCurrent", Target::Current)
+      .def("target.TargetExport", TargetInternal::Export)
+      .def("target.WithHost", TargetInternal::WithHost)
+      .def("target.TargetGetDeviceType",
+           [](const Target& target) { return target->GetTargetDeviceType(); })
+      .def("target.TargetGetFeature", [](const Target& target, const String& feature_key) -> Any {
+        if (auto opt_any = target->GetFeature<Any>(feature_key)) {
+          return opt_any.value();
+        } else {
+          return Any();
+        }
+      });
 });
-TVM_FFI_REGISTER_GLOBAL("target.TargetGetFeature")
-    .set_body_typed([](const Target& target, const String& feature_key) -> Any {
-      if (auto opt_any = target->GetFeature<Any>(feature_key)) {
-        return opt_any.value();
-      } else {
-        return Any();
-      }
-    });
 
 TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
     .set_dispatch<TargetNode>([](const ObjectRef& obj, ReprPrinter* p) {

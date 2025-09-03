@@ -19,7 +19,9 @@
 
 #include <cuda_fp16.h>
 #include <float.h>
+#include <tvm/ffi/extra/c_env_api.h>
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/runtime/ndarray.h>
 #include <tvm/runtime/packed_func.h>
 
@@ -36,8 +38,8 @@ void tvm_fp8_groupwise_scaled_group_gemm_sm100(NDArray a, NDArray b, NDArray sca
                                                NDArray out) {
   // Workspace is used for storing device-side group gemm arguments and cutlass internal workspace.
   // Recommended size is 4MB.
-  static auto func = tvm::ffi::Function::GetGlobalRequired("runtime.get_cuda_stream");
-  cudaStream_t stream = static_cast<cudaStream_t>(func().cast<void*>());
+  cudaStream_t stream =
+      static_cast<cudaStream_t>(TVMFFIEnvGetCurrentStream(kDLCUDA, a->device.device_id));
   CHECK_EQ(a->ndim, 2);
   CHECK_EQ(b->ndim, 3);
   CHECK_EQ(indptr->ndim, 1);
@@ -84,8 +86,11 @@ void tvm_fp8_groupwise_scaled_group_gemm_sm100(NDArray a, NDArray b, NDArray sca
   }
 }
 
-TVM_FFI_REGISTER_GLOBAL("cutlass.groupwise_scaled_group_gemm_e4m3fn_e4m3fn")
-    .set_body_typed(tvm_fp8_groupwise_scaled_group_gemm_sm100);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("cutlass.groupwise_scaled_group_gemm_e4m3fn_e4m3fn",
+                        tvm_fp8_groupwise_scaled_group_gemm_sm100);
+});
 
 }  // namespace runtime
 }  // namespace tvm

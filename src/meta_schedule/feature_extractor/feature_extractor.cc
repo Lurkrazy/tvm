@@ -16,6 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+#include <tvm/ffi/reflection/registry.h>
+
 #include "../utils.h"
 
 namespace tvm {
@@ -50,13 +52,13 @@ TVM_FFI_STATIC_INIT_BLOCK({
   PyFeatureExtractorNode::RegisterReflection();
 });
 
-TVM_REGISTER_OBJECT_TYPE(FeatureExtractorNode);
-TVM_REGISTER_NODE_TYPE(PyFeatureExtractorNode);
-
-TVM_FFI_REGISTER_GLOBAL("meta_schedule.FeatureExtractorExtractFrom")
-    .set_body_method(&FeatureExtractorNode::ExtractFrom);
-TVM_FFI_REGISTER_GLOBAL("meta_schedule.FeatureExtractorPyFeatureExtractor")
-    .set_body_typed(FeatureExtractor::PyFeatureExtractor);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def_method("meta_schedule.FeatureExtractorExtractFrom", &FeatureExtractorNode::ExtractFrom)
+      .def("meta_schedule.FeatureExtractorPyFeatureExtractor",
+           FeatureExtractor::PyFeatureExtractor);
+});
 
 }  // namespace meta_schedule
 }  // namespace tvm

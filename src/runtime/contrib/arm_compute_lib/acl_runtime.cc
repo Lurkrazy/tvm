@@ -23,6 +23,7 @@
  */
 
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/runtime/ndarray.h>
 
 #include "../json/json_node.h"
@@ -68,7 +69,7 @@ class ACLRuntime : public JSONRuntimeBase {
    *
    * \return module type key.
    */
-  const char* type_key() const override { return "arm_compute_lib"; }
+  const char* kind() const override { return "arm_compute_lib"; }
 
   /*!
    * \brief Initialize runtime. Create ACL layer from JSON
@@ -587,15 +588,19 @@ class ACLRuntime : public JSONRuntimeBase {
   }
 #endif
 };
-runtime::Module ACLRuntimeCreate(const String& symbol_name, const String& graph_json,
-                                 const Array<String>& const_names) {
+ffi::Module ACLRuntimeCreate(const String& symbol_name, const String& graph_json,
+                             const Array<String>& const_names) {
   auto n = make_object<ACLRuntime>(symbol_name, graph_json, const_names);
-  return runtime::Module(n);
+  return ffi::Module(n);
 }
 
-TVM_FFI_REGISTER_GLOBAL("runtime.arm_compute_lib_runtime_create").set_body_typed(ACLRuntimeCreate);
-TVM_FFI_REGISTER_GLOBAL("runtime.module.loadbinary_arm_compute_lib")
-    .set_body_typed(JSONRuntimeBase::LoadFromBinary<ACLRuntime>);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def("runtime.arm_compute_lib_runtime_create", ACLRuntimeCreate)
+      .def("ffi.Module.load_from_bytes.arm_compute_lib",
+           JSONRuntimeBase::LoadFromBytes<ACLRuntime>);
+});
 }  //  namespace contrib
 }  //  namespace runtime
 }  //  namespace tvm

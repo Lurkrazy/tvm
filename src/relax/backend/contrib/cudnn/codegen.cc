@@ -21,6 +21,7 @@
  * \file src/relax/backend/contrib/cudnn/codegen.cc
  * \brief Implementation of the cuDNN JSON serializer.
  */
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/module.h>
 
 #include <string>
@@ -51,7 +52,7 @@ class cuDNNJSONSerializer : public JSONSerializer {
     ICHECK(fn.defined()) << "Expects the callee to be a function.";
 
     auto composite_opt = fn->GetAttr<String>(attr::kComposite);
-    ICHECK(composite_opt.defined()) << "Only composite functions are supported.";
+    ICHECK(composite_opt.has_value()) << "Only composite functions are supported.";
 
     std::string composite_name = composite_opt.value();
 
@@ -132,9 +133,9 @@ class cuDNNJSONSerializer : public JSONSerializer {
   Map<Var, Expr> bindings_;
 };
 
-Array<runtime::Module> cuDNNCompiler(Array<Function> functions, Map<String, ffi::Any> /*unused*/,
-                                     Map<Constant, String> constant_names) {
-  Array<runtime::Module> compiled_functions;
+Array<ffi::Module> cuDNNCompiler(Array<Function> functions, Map<String, ffi::Any> /*unused*/,
+                                 Map<Constant, String> constant_names) {
+  Array<ffi::Module> compiled_functions;
 
   for (const auto& func : functions) {
     cuDNNJSONSerializer serializer(constant_names, AnalyzeVar2Value(func));
@@ -143,13 +144,16 @@ Array<runtime::Module> cuDNNCompiler(Array<Function> functions, Map<String, ffi:
     auto constant_names = serializer.GetConstantNames();
     const auto pf = tvm::ffi::Function::GetGlobalRequired("runtime.cuDNNJSONRuntimeCreate");
     auto func_name = GetExtSymbol(func);
-    compiled_functions.push_back(pf(func_name, graph_json, constant_names).cast<runtime::Module>());
+    compiled_functions.push_back(pf(func_name, graph_json, constant_names).cast<ffi::Module>());
   }
 
   return compiled_functions;
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.ext.cudnn").set_body_typed(cuDNNCompiler);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.ext.cudnn", cuDNNCompiler);
+});
 
 }  // namespace contrib
 }  // namespace relax

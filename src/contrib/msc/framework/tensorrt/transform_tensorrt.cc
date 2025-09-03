@@ -23,6 +23,7 @@
  */
 
 #include <dmlc/json.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/relax/attrs/sorting.h>
 #include <tvm/relax/expr.h>
 #include <tvm/relax/expr_functor.h>
@@ -284,7 +285,7 @@ Expr RewriteAttention(BlockBuilder builder, const Var& var, const Call& src_call
 
   // causal_mask
   Expr s_value;
-  if (!src_attrs->causal_mask.defined()) {
+  if (!src_attrs->causal_mask.has_value()) {
     auto softmax_attrs = make_object<SoftmaxAttrs>();
     softmax_attrs->axis = 2;
     s_value = RewriteUtils::MakeCall(builder, ExprUtils::GetSpanName(call, "act"), softmax_op,
@@ -913,7 +914,10 @@ Pass TransformTensorRT(const String& config) {
   return CreateFunctionPass(pass_func, 0, "TransformTensorRT", {});
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.transform.TransformTensorRT").set_body_typed(TransformTensorRT);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.transform.TransformTensorRT", TransformTensorRT);
+});
 
 }  // namespace transform
 }  // namespace relax

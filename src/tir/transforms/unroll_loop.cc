@@ -24,6 +24,7 @@
 // Unrolls the loop as in Halide pipeline.
 #include <tvm/arith/analyzer.h>
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/tir/expr.h>
 #include <tvm/tir/op.h>
 #include <tvm/tir/stmt_functor.h>
@@ -74,7 +75,7 @@ class UnrollLoopConfig : public Attrs {
 };
 
 TVM_FFI_STATIC_INIT_BLOCK({ UnrollLoopConfigNode::RegisterReflection(); });
-TVM_REGISTER_NODE_TYPE(UnrollLoopConfigNode);
+
 TVM_REGISTER_PASS_CONFIG_OPTION("tir.UnrollLoop", UnrollLoopConfig);
 
 class VarLocalAccessMarker : public ExprVisitor {
@@ -292,7 +293,10 @@ Pass UnrollLoop() {
   return CreatePrimFuncPass(pass_func, 0, "tir.UnrollLoop", {});
 }
 
-TVM_FFI_REGISTER_GLOBAL("tir.transform.UnrollLoop").set_body_typed(UnrollLoop);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("tir.transform.UnrollLoop", UnrollLoop);
+});
 
 }  // namespace transform
 

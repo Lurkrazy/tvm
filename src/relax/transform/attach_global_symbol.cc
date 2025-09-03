@@ -21,6 +21,7 @@
  * \brief Attach global_symbol to Relax functions and TIR Primfuncs for codegen.
  */
 
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/module.h>
 #include <tvm/ir/replace_global_vars.h>
 #include <tvm/relax/struct_info.h>
@@ -54,7 +55,7 @@ Pass AttachGlobalSymbol() {
         new_func = WithAttr(GetRef<Function>(relax_func), tvm::attr::kGlobalSymbol, new_name);
       }
 
-      if (new_name.defined() && (!old_name.defined() || old_name.value() != new_name.value())) {
+      if (new_name.has_value() && (!old_name.has_value() || old_name.value() != new_name.value())) {
         updates->Add(gvar, new_func);
         if (new_name.value() != gvar->name_hint) {
           GlobalVar new_gvar(new_name.value());
@@ -79,7 +80,10 @@ Pass AttachGlobalSymbol() {
   return CreateModulePass(pass_func, 0, "AttachGlobalSymbol", {});
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.transform.AttachGlobalSymbol").set_body_typed(AttachGlobalSymbol);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.transform.AttachGlobalSymbol", AttachGlobalSymbol);
+});
 }  // namespace transform
 }  // namespace relax
 }  // namespace tvm

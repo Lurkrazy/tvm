@@ -22,6 +22,7 @@
  * \brief Pass for fuse ShapeExpr.
  */
 
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/relax/analysis.h>
 #include <tvm/relax/expr.h>
 #include <tvm/relax/expr_functor.h>
@@ -54,7 +55,7 @@ class TupleFuser : public ExprMutator {
         main_var = gv;
       } else {
         const auto& name_opt = func->GetAttr<String>(attr::kComposite);
-        if (name_opt.defined() && StringUtils::StartsWith(name_opt.value(), target_)) {
+        if (name_opt.has_value() && StringUtils::StartsWith(name_opt.value(), target_)) {
           target_funcs_.Set(gv, Downcast<Function>(func));
         }
       }
@@ -75,7 +76,7 @@ class TupleFuser : public ExprMutator {
         if (arg->IsInstance<TupleNode>()) {
           String tuple_name;
           const auto& name_opt = target_funcs_[val->op]->GetAttr<String>(msc_attr::kUnique);
-          if (name_opt.defined()) {
+          if (name_opt.has_value()) {
             if (val->args.size() == 1) {
               tuple_name = name_opt.value() + "_input";
             } else {
@@ -231,7 +232,10 @@ Pass FuseTuple(const String& target, const String& entry_name) {
   return CreateModulePass(pass_func, 0, "FuseTuple", {});
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.transform.FuseTuple").set_body_typed(FuseTuple);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.transform.FuseTuple", FuseTuple);
+});
 
 }  // namespace transform
 }  // namespace relax

@@ -23,6 +23,7 @@
 #include <tvm/arith/analyzer.h>
 #include <tvm/arith/bound.h>
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/tir/analysis.h>
 #include <tvm/tir/builtin.h>
 #include <tvm/tir/expr.h>
@@ -70,7 +71,6 @@ class LoopPartitionConfig : public Attrs {
   TVM_DEFINE_NOTNULLABLE_OBJECT_REF_METHODS(LoopPartitionConfig, Attrs, LoopPartitionConfigNode);
 };
 
-TVM_REGISTER_NODE_TYPE(LoopPartitionConfigNode);
 TVM_REGISTER_PASS_CONFIG_OPTION("tir.LoopPartition", LoopPartitionConfig);
 
 using arith::DeduceBound;
@@ -154,9 +154,9 @@ class CandidateSelector final : public StmtExprVisitor {
     } else if (op->attr_key == attr::pragma_loop_partition_hint) {
       if (analyzer_.CanProve(op->value)) {
         const VarNode* var = nullptr;
-        if (op->node->IsInstance<VarNode>()) {
+        if (op->node.as<VarNode>()) {
           var = op->node.as<VarNode>();
-        } else if (op->node->IsInstance<IterVarNode>()) {
+        } else if (op->node.as<IterVarNode>()) {
           var = op->node.as<IterVarNode>()->var.get();
         }
         ICHECK(var);
@@ -819,7 +819,10 @@ Pass LoopPartition() {
   return CreatePrimFuncPass(pass_func, 0, "tir.LoopPartition", {});
 }
 
-TVM_FFI_REGISTER_GLOBAL("tir.transform.LoopPartition").set_body_typed(LoopPartition);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("tir.transform.LoopPartition", LoopPartition);
+});
 
 }  // namespace transform
 

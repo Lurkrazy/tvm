@@ -18,6 +18,7 @@
  */
 
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/module.h>
 #include <tvm/relax/analysis.h>
 #include <tvm/relax/type.h>
@@ -200,7 +201,7 @@ class NNAPIJSONSerializer : public JSONSerializer {
     ICHECK(fn.defined()) << "Expects the callee to be a function.";
 
     auto composite_opt = fn->GetAttr<String>(attr::kComposite);
-    ICHECK(composite_opt.defined()) << "Only composite functions are supported.";
+    ICHECK(composite_opt.has_value()) << "Only composite functions are supported.";
 
     std::string composite_name = composite_opt.value();
 
@@ -246,11 +247,11 @@ void CollectFromCompositeFunctionBody::VisitExpr_(const CallNode* call_node) {
   ExprVisitor::VisitExpr_(call_node);
 }
 
-Array<runtime::Module> NNAPICompiler(Array<Function> functions, Map<String, ffi::Any> /*unused*/,
-                                     Map<Constant, String> constant_names) {
+Array<ffi::Module> NNAPICompiler(Array<Function> functions, Map<String, ffi::Any> /*unused*/,
+                                 Map<Constant, String> constant_names) {
   VLOG(1) << "NNAPI Compiler";
 
-  Array<runtime::Module> compiled_functions;
+  Array<ffi::Module> compiled_functions;
   for (const auto& func : functions) {
     NNAPIJSONSerializer serializer(constant_names, AnalyzeVar2Value(func));
     serializer.serialize(func);
@@ -258,13 +259,18 @@ Array<runtime::Module> NNAPICompiler(Array<Function> functions, Map<String, ffi:
     auto constant_names = serializer.GetConstantNames();
     const auto pf = tvm::ffi::Function::GetGlobalRequired("runtime.nnapi_runtime_create");
     auto func_name = GetExtSymbol(func);
-    compiled_functions.push_back(pf(func_name, graph_json, constant_names));
+    auto result = pf(func_name, graph_json, constant_names);
+    tvm::ffi::Module mod = result.cast<tvm::ffi::Module>();
+    compiled_functions.push_back(mod);
   }
 
   return compiled_functions;
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.ext.nnapi").set_body_typed(NNAPICompiler);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.ext.nnapi", NNAPICompiler);
+});
 
 }  // namespace contrib
 }  // namespace relax

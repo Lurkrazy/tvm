@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-#include <tvm/ffi/reflection/reflection.h>
+#include <tvm/ffi/reflection/registry.h>
 
 #include "../utils.h"
 
@@ -80,7 +80,7 @@ class PostOrderApplyNode : public SpaceGeneratorNode {
           continue;
         }
         if (!ScheduleRule::IsApplyCustomRule(sch_rule)) {
-          if (tir::GetAnn<String>(sch->GetSRef(block_rv), "schedule_rule").defined()) {
+          if (tir::GetAnn<String>(sch->GetSRef(block_rv), "schedule_rule").has_value()) {
             stack.emplace_back(sch, blocks);
             continue;
           }
@@ -117,9 +117,11 @@ SpaceGenerator SpaceGenerator::PostOrderApply(ffi::Function f_block_filter,
 
 TVM_FFI_STATIC_INIT_BLOCK({ PostOrderApplyNode::RegisterReflection(); });
 
-TVM_REGISTER_NODE_TYPE(PostOrderApplyNode);
-TVM_FFI_REGISTER_GLOBAL("meta_schedule.SpaceGeneratorPostOrderApply")
-    .set_body_typed(SpaceGenerator::PostOrderApply);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("meta_schedule.SpaceGeneratorPostOrderApply",
+                        SpaceGenerator::PostOrderApply);
+});
 
 }  // namespace meta_schedule
 }  // namespace tvm

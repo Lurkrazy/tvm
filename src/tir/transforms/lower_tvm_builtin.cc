@@ -22,6 +22,7 @@
  * \file tir/transforms/lower_tvm_buildin.cc
  */
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/tir/builtin.h>
 #include <tvm/tir/expr.h>
 #include <tvm/tir/stmt_functor.h>
@@ -520,6 +521,9 @@ class BuiltinLower : public StmtExprMutator {
         prep_seq->emplace_back(TVMStructSet(args_stack, stack_offset, builtin::kTVMFFIAnyTypeIndex,
                                             ConstInt32(arg_type_index)));
       }
+      // set zero padding to ensure compatibility with FFI convention
+      prep_seq->emplace_back(
+          TVMStructSet(args_stack, stack_offset, builtin::kTVMFFIAnyZeroPadding, ConstInt32(0)));
       // handle arg value
       // NOTE: the intrinsic codegen will handle padding value clear for 32bit
       // types or types that are smaller than 64 bits.
@@ -577,6 +581,8 @@ class BuiltinLower : public StmtExprMutator {
     // explicitly set return value to None to avoid bad state interpretation
     prep_seq.emplace_back(TVMStructSet(scope.stack_ffi_any, num_args, builtin::kTVMFFIAnyTypeIndex,
                                        ConstInt32(ffi::TypeIndex::kTVMFFINone)));
+    prep_seq.emplace_back(
+        TVMStructSet(scope.stack_ffi_any, num_args, builtin::kTVMFFIAnyZeroPadding, ConstInt32(0)));
     prep_seq.emplace_back(TVMStructSet(scope.stack_ffi_any, num_args, builtin::kTVMFFIAnyUnionValue,
                                        make_zero(DataType::Int(64))));
     // Verify stack size matches earlier value.
@@ -673,7 +679,10 @@ Pass LowerTVMBuiltin() {
   return CreatePrimFuncPass(pass_func, 0, "tir.LowerTVMBuiltin", {});
 }
 
-TVM_FFI_REGISTER_GLOBAL("tir.transform.LowerTVMBuiltin").set_body_typed(LowerTVMBuiltin);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("tir.transform.LowerTVMBuiltin", LowerTVMBuiltin);
+});
 
 }  // namespace transform
 }  // namespace tir

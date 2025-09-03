@@ -24,13 +24,13 @@
 #ifndef TVM_IR_GLOBAL_VAR_SUPPLY_H_
 #define TVM_IR_GLOBAL_VAR_SUPPLY_H_
 
+#include <tvm/ffi/reflection/registry.h>
+#include <tvm/ir/expr.h>
+#include <tvm/ir/module.h>
+#include <tvm/ir/name_supply.h>
+
 #include <string>
 #include <unordered_map>
-
-#include "tvm/ffi/reflection/reflection.h"
-#include "tvm/ir/expr.h"
-#include "tvm/ir/module.h"
-#include "tvm/ir/name_supply.h"
 
 namespace tvm {
 
@@ -85,8 +85,7 @@ class GlobalVarSupplyNode : public Object {
   NameSupply name_supply_;
 
   static constexpr const char* _type_key = "ir.GlobalVarSupply";
-  static constexpr const bool _type_has_method_sequal_reduce = false;
-  static constexpr const bool _type_has_method_shash_reduce = false;
+
   TVM_DECLARE_FINAL_OBJECT_INFO(GlobalVarSupplyNode, Object);
 
  private:

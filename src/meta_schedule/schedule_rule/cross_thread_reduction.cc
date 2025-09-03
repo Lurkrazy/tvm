@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-#include <tvm/ffi/reflection/reflection.h>
+#include <tvm/ffi/reflection/registry.h>
 
 #include "../utils.h"
 
@@ -295,9 +295,12 @@ ScheduleRule ScheduleRule::CrossThreadReduction(Array<Integer> thread_extents) {
 }
 
 TVM_FFI_STATIC_INIT_BLOCK({ CrossThreadReductionNode::RegisterReflection(); });
-TVM_REGISTER_NODE_TYPE(CrossThreadReductionNode);
-TVM_FFI_REGISTER_GLOBAL("meta_schedule.ScheduleRuleCrossThreadReduction")
-    .set_body_typed(ScheduleRule::CrossThreadReduction);
+
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("meta_schedule.ScheduleRuleCrossThreadReduction",
+                        ScheduleRule::CrossThreadReduction);
+});
 
 }  // namespace meta_schedule
 }  // namespace tvm

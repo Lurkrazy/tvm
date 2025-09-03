@@ -87,7 +87,6 @@ def vrmpy(operations):
                 vn_ind = T.axis.remap("S", [n])
                 c_buffer[vn_ind, T.ramp(0, 1, 32)] = T.call_llvm_intrin(
                     T.llvm_lookup_intrinsic_id("llvm.hexagon.V6.vrmpyubv.128B"),
-                    T.uint32(2),
                     T.reinterpret(a_buffer[vn_ind, T.ramp(0, 1, 128)], dtype="int32x32"),
                     T.reinterpret(b_buffer[vn_ind, T.ramp(0, 1, 128)], dtype="int32x32"),
                     dtype="int32x32",
@@ -124,7 +123,6 @@ def preloaded_vrmpy(operations):
                 vn_ind = T.axis.remap("S", [n])
                 c_buffer[T.ramp(T.cast(vn_ind, "int32") * 32, 1, 32)] = T.call_llvm_intrin(
                     T.llvm_lookup_intrinsic_id("llvm.hexagon.V6.vrmpyubv.128B"),
-                    T.uint32(2),
                     T.reinterpret(
                         a_buffer[T.ramp(T.cast(vn_ind, "int32") * 128, 1, 128)], dtype="int32x32"
                     ),
@@ -168,7 +166,6 @@ def preallocated_vrmpy(operations):
                 vn_ind = T.axis.remap("S", [n])
                 c_global_vtcm[T.ramp(T.cast(vn_ind, "int32") * 32, 1, 32)] = T.call_llvm_intrin(
                     T.llvm_lookup_intrinsic_id("llvm.hexagon.V6.vrmpyubv.128B"),
-                    T.uint32(2),
                     T.reinterpret(
                         a_global_vtcm[T.ramp(T.cast(vn_ind, "int32") * 128, 1, 128)],
                         dtype="int32x32",
@@ -267,7 +264,6 @@ def preallocated_single_dma_vrmpy(operations):
                 vn_ind = T.axis.remap("S", [n])
                 c_global_vtcm[T.ramp(T.cast(vn_ind, "int32") * 32, 1, 32)] = T.call_llvm_intrin(
                     T.llvm_lookup_intrinsic_id("llvm.hexagon.V6.vrmpyubv.128B"),
-                    T.uint32(2),
                     T.reinterpret(
                         a_global_vtcm[T.ramp(T.cast(vn_ind, "int32") * 128, 1, 128)],
                         dtype="int32x32",
@@ -331,7 +327,7 @@ def setup_and_run(hexagon_session, sch, a, b, c, operations, mem_scope="global")
     repeat = 1
 
     timer = module.time_evaluator(
-        "__tvm_main__", hexagon_session.device, number=number, repeat=repeat
+        "__tvm_ffi_main__", hexagon_session.device, number=number, repeat=repeat
     )
     time = timer(a_hexagon, b_hexagon, c_hexagon)
     gops = round(operations * 128 * 3 / time.mean / 1e9, 4)
@@ -365,7 +361,7 @@ def setup_and_run_preallocated(hexagon_session, sch, a, b, c, operations):
     repeat = 1
 
     timer = module.time_evaluator(
-        "__tvm_main__", hexagon_session.device, number=number, repeat=repeat
+        "__tvm_ffi_main__", hexagon_session.device, number=number, repeat=repeat
     )
     time = timer(a_hexagon, b_hexagon, c_hexagon, a_vtcm_hexagon, b_vtcm_hexagon, c_vtcm_hexagon)
     gops = round(operations * 128 * 3 / time.mean / 1e9, 4)

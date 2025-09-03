@@ -23,6 +23,7 @@
 #include "hexagon_common.h"
 
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/runtime/logging.h>
 #include <tvm/runtime/profiling.h>
 
@@ -31,7 +32,6 @@
 #include <utility>
 #include <vector>
 
-#include "../library_module.h"
 #include "HAP_debug.h"
 #include "HAP_perf.h"
 #include "hexagon_buffer.h"
@@ -54,10 +54,10 @@ class HexagonTimerNode : public TimerNode {
   uint64_t start, end;
 };
 
-TVM_REGISTER_OBJECT_TYPE(HexagonTimerNode);
-
-TVM_FFI_REGISTER_GLOBAL("profiling.timer.hexagon").set_body_typed([](Device dev) {
-  return Timer(make_object<HexagonTimerNode>());
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("profiling.timer.hexagon",
+                        [](Device dev) { return Timer(make_object<HexagonTimerNode>()); });
 });
 }  // namespace hexagon
 
@@ -89,11 +89,14 @@ void LogMessageImpl(const std::string& file, int lineno, int level, const std::s
 }
 }  // namespace detail
 
-TVM_FFI_REGISTER_GLOBAL("runtime.module.loadfile_hexagon")
-    .set_body_packed([](ffi::PackedArgs args, ffi::Any* rv) {
-      ObjectPtr<Library> n = CreateDSOLibraryObject(args[0].cast<String>());
-      *rv = CreateModuleFromLibrary(n);
-    });
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def_packed(
+      "ffi.Module.load_from_file.hexagon", [](ffi::PackedArgs args, ffi::Any* rv) {
+        auto floader = tvm::ffi::Function::GetGlobalRequired("ffi.Module.load_from_file.so");
+        *rv = floader(args[0].cast<String>(), "so");
+      });
+});
 
 }  // namespace runtime
 }  // namespace tvm

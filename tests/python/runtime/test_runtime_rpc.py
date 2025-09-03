@@ -80,7 +80,7 @@ def test_bigendian_rpc():
         b = tvm.nd.array(np.zeros(shape).astype(A.dtype), device=dev)
         temp = utils.tempdir()
         path_dso = temp.relpath("dev_lib.o")
-        f.save(path_dso)
+        f.write_to_file(path_dso)
         remote.upload(path_dso)
         f = remote.load_module("dev_lib.o")
         f(a, b)
@@ -413,7 +413,6 @@ def test_rpc_return_remote_object():
         get_elem = client.get_function("testing.GetShapeElem")
         get_size = client.get_function("testing.GetShapeSize")
         shape = make_shape(2, 3)
-        assert shape.type_key == "runtime.RPCObjectRef"
         assert get_elem(shape, 0) == 2
         assert get_elem(shape, 1) == 3
         assert get_size(shape) == 2

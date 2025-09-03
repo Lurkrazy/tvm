@@ -22,6 +22,7 @@
  * \brief Target kind registry
  */
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/expr.h>
 #include <tvm/runtime/device_api.h>
 #include <tvm/target/target.h>
@@ -35,24 +36,21 @@
 
 namespace tvm {
 
-TVM_FFI_STATIC_INIT_BLOCK({ TargetKindNode::RegisterReflection(); });
-
-// helper to get internal dev function in objectref.
-struct TargetKind2ObjectPtr : public ObjectRef {
-  static ObjectPtr<Object> Get(const TargetKind& kind) {
-    return ffi::details::ObjectUnsafe::ObjectPtrFromObjectRef<Object>(kind);
-  }
-};
-
-TVM_REGISTER_NODE_TYPE(TargetKindNode)
-    .set_creator([](const std::string& name) {
-      auto kind = TargetKind::Get(name);
-      ICHECK(kind.defined()) << "Cannot find target kind \'" << name << '\'';
-      return TargetKind2ObjectPtr::Get(kind.value());
-    })
-    .set_repr_bytes([](const Object* n) -> std::string {
-      return static_cast<const TargetKindNode*>(n)->name;
-    });
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  TargetKindNode::RegisterReflection();
+  refl::TypeAttrDef<TargetKindNode>()
+      .def("__data_to_json__",
+           [](const TargetKindNode* node) {
+             // simply save as the string
+             return node->name;
+           })
+      .def("__data_from_json__", [](const String& name) {
+        auto kind = TargetKind::Get(name);
+        ICHECK(kind.has_value()) << "Cannot find target kind \'" << name << '\'';
+        return kind.value();
+      });
+});
 
 TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
     .set_dispatch<TargetKindNode>([](const ObjectRef& obj, ReprPrinter* p) {
@@ -448,23 +446,24 @@ TVM_REGISTER_TARGET_KIND("test", kDLCPU)  // line break
 
 /**********  Registry  **********/
 
-TVM_FFI_REGISTER_GLOBAL("target.TargetKindGetAttr")
-    .set_body_typed([](TargetKind kind, String attr_name) -> ffi::Any {
-      auto target_attr_map = TargetKind::GetAttrMap<ffi::Any>(attr_name);
-      ffi::Any rv;
-      if (target_attr_map.count(kind)) {
-        rv = target_attr_map[kind];
-      }
-      return rv;
-    });
-TVM_FFI_REGISTER_GLOBAL("target.ListTargetKinds")
-    .set_body_typed(TargetKindRegEntry::ListTargetKinds);
-TVM_FFI_REGISTER_GLOBAL("target.ListTargetKindOptions")
-    .set_body_typed(TargetKindRegEntry::ListTargetKindOptions);
-TVM_FFI_REGISTER_GLOBAL("target.ListTargetKindOptionsFromName")
-    .set_body_typed([](String target_kind_name) {
-      TargetKind kind = TargetKind::Get(target_kind_name).value();
-      return TargetKindRegEntry::ListTargetKindOptions(kind);
-    });
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def("target.TargetKindGetAttr",
+           [](TargetKind kind, String attr_name) -> ffi::Any {
+             auto target_attr_map = TargetKind::GetAttrMap<ffi::Any>(attr_name);
+             ffi::Any rv;
+             if (target_attr_map.count(kind)) {
+               rv = target_attr_map[kind];
+             }
+             return rv;
+           })
+      .def("target.ListTargetKinds", TargetKindRegEntry::ListTargetKinds)
+      .def("target.ListTargetKindOptions", TargetKindRegEntry::ListTargetKindOptions)
+      .def("target.ListTargetKindOptionsFromName", [](String target_kind_name) {
+        TargetKind kind = TargetKind::Get(target_kind_name).value();
+        return TargetKindRegEntry::ListTargetKindOptions(kind);
+      });
+});
 
 }  // namespace tvm

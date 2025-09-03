@@ -21,6 +21,7 @@
  * \file make_packed_api.cc Lower PrimFunc to use the packed function API.
  */
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/runtime/device_api.h>
 #include <tvm/runtime/module.h>
 #include <tvm/target/target.h>
@@ -104,12 +105,17 @@ class ReturnRewriter : public StmtMutator {
                                 {ret_var_, IntImm(DataType::Int(32), 0),
                                  IntImm(DataType::Int(32), tir::builtin::kTVMFFIAnyTypeIndex),
                                  IntImm(DataType::Int(32), info.type_index)}));
+    Stmt store_zero_padding =
+        tir::Evaluate(tir::Call(DataType::Int(32), tir::builtin::tvm_struct_set(),
+                                {ret_var_, IntImm(DataType::Int(32), 0),
+                                 IntImm(DataType::Int(32), tir::builtin::kTVMFFIAnyZeroPadding),
+                                 IntImm(DataType::Int(32), 0)}));
     Stmt store_val = tir::Evaluate(
         tir::Call(DataType::Int(32), tir::builtin::tvm_struct_set(),
                   {ret_var_, IntImm(DataType::Int(32), 0),
                    IntImm(DataType::Int(32), tir::builtin::kTVMFFIAnyUnionValue), info.expr}));
     Stmt ret_zero = Evaluate(tvm::ret(0));
-    return SeqStmt({store_tindex, store_val, ret_zero});
+    return SeqStmt({store_tindex, store_zero_padding, store_val, ret_zero});
   }
 
   Var ret_var_;
@@ -186,7 +192,7 @@ Optional<String> RequiresPackedAPI(const PrimFunc& func) {
 
   // Internal function calls do not need the ffi::Function API
   auto global_symbol = func->GetAttr<String>(tvm::attr::kGlobalSymbol);
-  if (!global_symbol.defined()) {
+  if (!global_symbol.has_value()) {
     return std::nullopt;
   }
 
@@ -195,7 +201,7 @@ Optional<String> RequiresPackedAPI(const PrimFunc& func) {
 
 PrimFunc MakePackedAPI(PrimFunc func) {
   auto global_symbol = RequiresPackedAPI(func);
-  if (!global_symbol.defined()) {
+  if (!global_symbol.has_value()) {
     return func;
   }
   std::string name_hint = global_symbol.value();
@@ -293,10 +299,12 @@ PrimFunc MakePackedAPI(PrimFunc func) {
                                        tvm::tir::StringImm(msg.str()), nop));
       // if type_index is NDArray, we need to add the offset of the DLTensor header
       // which always equals 16 bytes, this ensures that T.handle always shows up as a DLTensor*
+      const int64_t object_cell_offset = sizeof(TVMFFIObject);
+      static_assert(object_cell_offset == 24);
       arg_value = f_load_arg_value(param.dtype(), i);
       PrimExpr handle_from_ndarray =
           Call(DataType::Handle(), tir::builtin::handle_add_byte_offset(),
-               {arg_value, IntImm(DataType::Int(32), 16)});
+               {arg_value, IntImm(DataType::Int(32), object_cell_offset)});
       arg_value =
           Select(type_index == ffi::TypeIndex::kTVMFFINDArray, handle_from_ndarray, arg_value);
     } else if (dtype.is_bool()) {
@@ -364,7 +372,7 @@ PrimFunc MakePackedAPI(PrimFunc func) {
                   StringImm(name_hint + "_compute_"), body);
   // Set device context
   if (vmap.count(device_id.get())) {
-    ObjectRef node = String("default");
+    ffi::Any node = ffi::String("default");
     seq_check.push_back(AttrStmt(node, attr::device_id, device_id, nop));
     seq_check.push_back(AttrStmt(node, attr::device_type, device_type, nop));
 
@@ -438,8 +446,9 @@ Pass MakePackedAPI() {
   return tvm::transform::CreateModulePass(pass_func, 0, "tir.MakePackedAPI", {});
 }
 
-TVM_FFI_REGISTER_GLOBAL("tir.transform.MakePackedAPI").set_body_typed([]() {
-  return MakePackedAPI();
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("tir.transform.MakePackedAPI", []() { return MakePackedAPI(); });
 });
 }  // namespace transform
 }  // namespace tir

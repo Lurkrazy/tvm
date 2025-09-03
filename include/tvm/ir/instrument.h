@@ -26,9 +26,9 @@
 #ifndef TVM_IR_INSTRUMENT_H_
 #define TVM_IR_INSTRUMENT_H_
 
-#include <tvm/ffi/reflection/reflection.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/ffi/string.h>
-#include <tvm/node/reflection.h>
+#include <tvm/node/node.h>
 
 #include <utility>
 #include <vector>

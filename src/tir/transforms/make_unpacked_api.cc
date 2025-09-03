@@ -21,6 +21,7 @@
  * \file make_unpacked_api.cc Lower PrimFunc to a standard C function API.
  */
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/runtime/device_api.h>
 #include <tvm/target/target.h>
 #include <tvm/tir/analysis.h>
@@ -102,7 +103,7 @@ PrimFunc MakeUnpackedAPI(PrimFunc func) {
 
   // Internal function calls do not need API updates
   auto global_symbol = func->GetAttr<String>(tvm::attr::kGlobalSymbol);
-  if (!global_symbol.defined()) {
+  if (!global_symbol.has_value()) {
     return func;
   }
 
@@ -127,7 +128,7 @@ PrimFunc MakeUnpackedAPI(PrimFunc func) {
   // Setup device context
   Integer device_type(target_device_type);
   Integer device_id(0);
-  ObjectRef node = String("default");
+  ffi::Any node = ffi::String("default");
   const Stmt nop = Evaluate(0);
   std::vector<Stmt> device_init;
 
@@ -200,7 +201,10 @@ Pass MakeUnpackedAPI() {
   return tvm::transform::CreateModulePass(pass_func, 0, "tir.MakeUnpackedAPI", {});
 }
 
-TVM_FFI_REGISTER_GLOBAL("tir.transform.MakeUnpackedAPI").set_body_typed(MakeUnpackedAPI);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("tir.transform.MakeUnpackedAPI", MakeUnpackedAPI);
+});
 }  // namespace transform
 }  // namespace tir
 }  // namespace tvm

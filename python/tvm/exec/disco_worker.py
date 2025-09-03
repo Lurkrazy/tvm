@@ -22,7 +22,7 @@ import sys
 from typing import Callable
 
 import tvm
-from tvm.ffi import get_global_func, register_func
+from tvm_ffi import get_global_func, register_func
 from tvm.runtime import NDArray, ShapeTuple, String
 from tvm.runtime.ndarray import array
 
@@ -48,8 +48,8 @@ def _str_func(x: str):
 
 
 @register_func("tests.disco.str_obj", override=True)
-def _str_obj_func(x: String):
-    assert isinstance(x, String)
+def _str_obj_func(x: str):
+    assert isinstance(x, str)
     return String(x + "_suffix")
 
 

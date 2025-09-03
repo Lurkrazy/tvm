@@ -17,6 +17,7 @@
  * under the License.
  */
 
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/relax/analysis.h>
 #include <tvm/relax/expr.h>
 #include <tvm/relax/expr_functor.h>
@@ -164,7 +165,10 @@ Function FunctionInlineFunctions(Function func,
   return Downcast<Function>(mutator(std::move(func)));
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.FunctionInlineFunctions").set_body_typed(FunctionInlineFunctions);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.FunctionInlineFunctions", FunctionInlineFunctions);
+});
 
 namespace transform {
 
@@ -174,7 +178,7 @@ Pass InlinePrivateFunctions() {
     for (const auto& [gvar, base_func] : mod->functions) {
       if (auto opt = base_func.as<relax::Function>()) {
         auto func = opt.value();
-        bool is_private = !func->GetAttr<String>(tvm::attr::kGlobalSymbol).defined();
+        bool is_private = !func->GetAttr<String>(tvm::attr::kGlobalSymbol).has_value();
         if (is_private) {
           replacements.Set(gvar, func);
         }
@@ -219,8 +223,10 @@ Pass InlinePrivateFunctions() {
   return tvm::transform::CreateModulePass(pass_func, 0, "InlinePrivateFunctions", {});
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.transform.InlinePrivateFunctions")
-    .set_body_typed(InlinePrivateFunctions);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.transform.InlinePrivateFunctions", InlinePrivateFunctions);
+});
 
 }  // namespace transform
 

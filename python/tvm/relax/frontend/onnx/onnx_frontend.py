@@ -48,6 +48,7 @@ from tvm import TVMError, relax, tir, topi
 from tvm.ir import IRModule
 from tvm.ir.supply import NameSupply
 from tvm.tir.generic import cast
+from tvm.topi.utils import get_const_tuple
 
 from ..common import autopad
 
@@ -335,15 +336,17 @@ class BinaryBase(OnnxOpConverter):
         """Base implementation for binary operations."""
         if cls.numpy_op is None or cls.relax_op is None:
             raise ValueError("Numpy and Relax operators must be defined for BinaryBase.")
-        if all([isinstance(inp, relax.Constant) for inp in inputs]):
-            output = cls.numpy_op(  # pylint: disable=not-callable
-                inputs[0].data.numpy(), inputs[1].data.numpy()
-            )
-            return relax.const(output, inputs[0].struct_info.dtype)
-        if any([isinstance(inp, relax.PrimValue) for inp in inputs]):
+        if all([not isinstance(inp, (relax.expr.Call, relax.Var)) for inp in inputs]):
             x = _to_numpy(inputs[0])
             y = _to_numpy(inputs[1])
-            return relax.PrimValue(cls.numpy_op(x, y))  # pylint: disable=not-callable
+            output = cls.numpy_op(x, y)  # pylint: disable=not-callable
+            if x.dtype == y.dtype:
+                # no numpy precision widening
+                output = output.astype(x.dtype)
+            if all([isinstance(inp, relax.Constant) for inp in inputs]):
+                return relax.const(output, output.dtype)  # pylint: disable=not-callable
+            if any([isinstance(inp, relax.PrimValue) for inp in inputs]):
+                return relax.PrimValue(output.item())  # pylint: disable=not-callable
 
         return cls.relax_op(inputs[0], inputs[1])  # pylint: disable=not-callable
 
@@ -1099,8 +1102,7 @@ class PRelu(OnnxOpConverter):
     def _impl_v1(cls, bb, inputs, attr, params):
         x = inputs[0]
         slope = inputs[1]
-        # TODO(tvm-team): Should add a new op for this.
-        return x * slope + relax.op.nn.relu(x) * (relax.const(1.0) - slope)
+        return relax.op.nn.prelu(x, slope)
 
 
 class ThresholdedRelu(OnnxOpConverter):
@@ -1338,9 +1340,16 @@ class CumSum(OnnxOpConverter):
             axis = int(axis.data.numpy())
         elif isinstance(axis, relax.Var):
             axis = 0
-        data = relax.op.cumsum(data, axis)
+
         if attr.get("reverse", 0) != 0:
             data = bb.emit_te(topi.flip, data, axis=axis if axis else 0)
+
+        data = relax.op.cumsum(data, axis)
+        data = bb.normalize(data)
+
+        if attr.get("reverse", 0) != 0:
+            data = bb.emit_te(topi.flip, data, axis=axis if axis else 0)
+
         return data
 
 
@@ -1689,7 +1698,8 @@ class Softplus(OnnxOpConverter):
     @classmethod
     def _impl_v1(cls, bb, inputs, attr, params):
         dtype = inputs[0].struct_info.dtype
-        return relax.op.log(relax.op.exp(inputs[0]) + relax.const(1, dtype=dtype))
+        threshold = 10.0 if dtype == "float16" else 20.0
+        return relax.op.nn.softplus(inputs[0], threshold=threshold)
 
 
 class Softsign(OnnxOpConverter):
@@ -2119,30 +2129,41 @@ class Resize(OnnxOpConverter):
 
         # Define relax implementation.
         if roi is not None:
-            roi = relax.op.concat(
-                [
-                    relax.op.strided_slice(roi, axes=[0], begin=[2], end=[ndims]),
-                    relax.op.strided_slice(roi, axes=[0], begin=[ndims + 2], end=[2 * ndims]),
-                ],
-                axis=0,
-            )
+            if isinstance(roi, relax.Constant):
+                roi = roi.data.numpy().tolist()
+            else:
+                roi = relax.op.concat(
+                    [
+                        relax.op.strided_slice(roi, axes=[0], begin=[2], end=[ndims]),
+                        relax.op.strided_slice(roi, axes=[0], begin=[ndims + 2], end=[2 * ndims]),
+                    ],
+                    axis=0,
+                )
+                # TODO The backend C++ func resize2d does not support dynamic ROI for now.
+                raise NotImplementedError("Dynamic ROI is not supported in resize2d for now.")
         else:
             roi = [0.0] * 4
 
         # Convert scales to sizes if needed.
         if scales is not None:
-            assert isinstance(scales, relax.Constant), "Only constant scales currently supported."
-            scales = scales.data.numpy()
+            if isinstance(scales, relax.Constant):
+                scales = scales.data.numpy()
+            elif isinstance(scales, relax.expr.ShapeExpr):
+                scales = [int(val.value) for val in scales.values]
+            else:
+                assert f"Type {type(scales)} for scale is currently unsupported."
             sizes = []
 
             for i, dim in enumerate(x.struct_info.shape):
                 sizes.append(cast(scales[i] * dim, "int64"))
             sizes = sizes[2:]
         else:
-            assert isinstance(
-                sizes, relax.Constant
-            ), "Only constant output size currently supported."
-            sizes = sizes.data.numpy().astype("int64").tolist()[2:]
+            if isinstance(sizes, relax.Constant):
+                sizes = sizes.data.numpy().astype("int64").tolist()[2:]
+            elif isinstance(sizes, relax.expr.ShapeExpr):
+                sizes = [int(val.value) for val in sizes.values][2:]
+            else:
+                assert f"Type {type(size)} for size is currently unsupported."
 
         return relax.op.image.resize2d(
             x,
@@ -2488,9 +2509,19 @@ class LayerNormalization(OnnxOpConverter):
         axis = attr.get("axis", -1)
         epsilon = attr.get("epsilon", 1e-05)
 
+        gamma_shape = get_const_tuple(scale.struct_info.shape)
+
         if bias is None:
             seq_len = data.struct_info.shape[1].value
             bias = relax.const([0.0] * seq_len, dtype="float32")
+        else:
+            beta_shape = get_const_tuple(bias.struct_info.shape)
+            if gamma_shape != beta_shape:
+                raise ValueError("gamma and beta shapes do not match")
+
+        axis = list(axis) if isinstance(axis, (list, tuple)) else [axis]
+        if len(axis) < len(gamma_shape):
+            axis.extend(range(axis[-1] + 1, axis[-1] + 1 + len(gamma_shape) - len(axis)))
 
         output = relax.op.nn.layer_norm(data, scale, bias, axis, epsilon)
         # Onnx layernorm has 3 outputs but only the first is used.
@@ -3086,6 +3117,35 @@ class NonZero(OnnxOpConverter):
         )
 
 
+class Upsample(OnnxOpConverter):
+    """Operator converter for Upsample (nearest mode)."""
+
+    @classmethod
+    def _impl_v9(cls, bb, inputs, attr, params):
+        scales = attr.get("scales")
+        assert len(scales) == 4
+        assert scales[0] == scales[1] == 1
+
+        inp_shape = [int(x) for x in inputs[0].struct_info.shape]
+        assert len(inp_shape) == 4
+        out_shape2d = [int(dim * scale) for dim, scale in zip(inp_shape[2:], scales[2:])]
+
+        mode = attr.get("mode", b"nearest").decode("ascii")
+        if mode == "nearest":
+            mode = "nearest_neighbor"
+        msg = f'Value {mode} in attribute "mode" of operator Upsample is not valid.'
+        assert mode in ("linear", "nearest_neighbor", "cubic"), msg
+
+        return relax.op.image.resize2d(
+            data=inputs[0],
+            roi=None,
+            size=relax.ShapeExpr(out_shape2d),  # (H, W)
+            layout="NCHW",
+            method=mode,
+            coordinate_transformation_mode="asymmetric",  # Align with Upsample
+        )
+
+
 class HardSigmoid(OnnxOpConverter):
     """Converts an onnx HardSigmoid node into an equivalent Relax expression."""
 
@@ -3478,7 +3538,7 @@ def _get_convert_map():
         # "RoiAlign": RoiAlign,
         # "NonMaxSuppression": NonMaxSuppression,
         # "GridSample": GridSample,
-        # "Upsample": Upsample,
+        "Upsample": Upsample,
         # others
         "DepthToSpace": DepthToSpace,
         "SpaceToDepth": SpaceToDepth,
@@ -3700,6 +3760,7 @@ class ONNXGraphImporter:
             # convert it to a tensor.
             shape_compatible_ops = [
                 "Reshape",
+                "Resize",
                 "ConstantOfShape",
                 "Gather",
                 "Slice",

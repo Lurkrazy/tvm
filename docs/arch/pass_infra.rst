@@ -376,8 +376,10 @@ Python when needed.
       return CreateFunctionPass(pass_func, 0, "FoldConstant", {});
     }
 
-    TVM_FFI_REGISTER_GLOBAL("relax.transform.FoldConstant")
-    .set_body_typed(FoldConstant);
+    TVM_FFI_STATIC_INIT_BLOCK({
+      namespace refl = tvm::ffi::reflection;
+      refl::GlobalDef().def("relax.transform.FoldConstant", FoldConstant);
+    });
 
     }  // namespace transform
 
@@ -550,7 +552,7 @@ a certain scope.
 
 .. code:: python
 
-    @tvm.ffi.register_object("transform.PassContext")
+    @tvm_ffi.register_object("transform.PassContext")
     class PassContext(tvm.runtime.Object):
         def __enter__(self):
             _transform.EnterPassContext(self)

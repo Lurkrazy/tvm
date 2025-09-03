@@ -25,7 +25,7 @@
 #ifndef TVM_RELAX_TIR_PATTERN_H_
 #define TVM_RELAX_TIR_PATTERN_H_
 
-#include <tvm/ffi/reflection/reflection.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/tir/function.h>
 
 namespace tvm {
@@ -74,7 +74,7 @@ class MatchResult : public ObjectRef {
   TVM_DEFINE_OBJECT_REF_METHODS(MatchResult, ObjectRef, MatchResultNode);
 };
 
-using FCodegen = ffi::TypedFunction<Array<ObjectRef>(Array<MatchResult> match_results)>;
+using FCodegen = ffi::TypedFunction<Array<ffi::Any>(Array<MatchResult> match_results)>;
 }  // namespace relax
 }  // namespace tvm
 #endif  // TVM_RELAX_TIR_PATTERN_H_

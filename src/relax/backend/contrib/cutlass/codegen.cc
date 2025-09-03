@@ -21,7 +21,7 @@
  * \file src/relax/backend/contrib/cutlass/codegen.cc
  * \brief Implementation of the CUTLASS code generator for Relax.
  */
-#include <tvm/ffi/reflection/reflection.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/module.h>
 #include <tvm/ir/name_supply.h>
 #include <tvm/relax/analysis.h>
@@ -55,7 +55,7 @@ std::string EmitSignature(const std::vector<Output>& out, const std::string& fun
   return code_stream_.str();
 }
 
-runtime::Module Finalize(const std::string& code, const Array<String>& func_names) {
+ffi::Module Finalize(const std::string& code, const Array<String>& func_names) {
   ICHECK(!func_names.empty())
       << "Should only create CUTLASS CSourceModule if there is at least one CUTLASS partition";
 
@@ -72,7 +72,7 @@ runtime::Module Finalize(const std::string& code, const Array<String>& func_name
   VLOG(1) << "Generated CUTLASS code:" << std::endl << code;
   return pf(default_headers.str() + code, "cu", func_names,
             /*const_vars=*/Array<String>())
-      .cast<runtime::Module>();
+      .cast<ffi::Module>();
 }
 
 class CodegenResultNode : public Object {
@@ -105,12 +105,12 @@ class CodegenResult : public ObjectRef {
 
 TVM_FFI_STATIC_INIT_BLOCK({ CodegenResultNode::RegisterReflection(); });
 
-TVM_REGISTER_NODE_TYPE(CodegenResultNode);
-
-TVM_FFI_REGISTER_GLOBAL("contrib.cutlass.CodegenResult")
-    .set_body_typed([](String code, Array<String> headers) {
-      return CodegenResult(code, headers);
-    });
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("contrib.cutlass.CodegenResult", [](String code, Array<String> headers) {
+    return CodegenResult(code, headers);
+  });
+});
 
 GenerateBodyOutput GenerateBody(const std::string& func_name, const std::string& ext_func_id,
                                 const std::vector<std::string>& output_types,
@@ -219,7 +219,7 @@ class CodegenCutlass : public relax::MemoizedExprTranslator<OutputType>,
   }
 
   OutputType VisitExpr_(const FunctionNode* fn) final {
-    ICHECK(fn->GetAttr<String>(attr::kComposite).defined())
+    ICHECK(fn->GetAttr<String>(attr::kComposite).has_value())
         << "JSON runtime only supports composite functions";
     // FunctionNode should be handled by the caller.
     return {};
@@ -337,8 +337,7 @@ class CodegenCutlass : public relax::MemoizedExprTranslator<OutputType>,
 
 class CutlassModuleCodegen {
  public:
-  runtime::Module CreateCSourceModule(Array<Function> functions,
-                                      const Map<String, ffi::Any>& options) {
+  ffi::Module CreateCSourceModule(Array<Function> functions, const Map<String, ffi::Any>& options) {
     std::string headers = "";
     std::string code = "";
     for (const auto& f : functions) {
@@ -373,8 +372,8 @@ class CutlassModuleCodegen {
   Array<String> func_names_;
 };
 
-Array<runtime::Module> CUTLASSCompiler(Array<Function> functions, Map<String, ffi::Any> options,
-                                       Map<Constant, String> /*unused*/) {
+Array<ffi::Module> CUTLASSCompiler(Array<Function> functions, Map<String, ffi::Any> options,
+                                   Map<Constant, String> /*unused*/) {
   const auto tune_func = tvm::ffi::Function::GetGlobal("contrib.cutlass.tune_relax_function");
   ICHECK(tune_func.has_value())
       << "The packed function contrib.cutlass.tune_relax_function not found, "
@@ -386,12 +385,15 @@ Array<runtime::Module> CUTLASSCompiler(Array<Function> functions, Map<String, ff
   const auto pf = tvm::ffi::Function::GetGlobal("contrib.cutlass.compile");
   ICHECK(pf.has_value()) << "The packed function contrib.cutlass.compile not found, please import "
                             "tvm.contrib.cutlass.build";
-  runtime::Module cutlass_mod = (*pf)(source_mod, options).cast<runtime::Module>();
+  ffi::Module cutlass_mod = (*pf)(source_mod, options).cast<ffi::Module>();
 
   return {cutlass_mod};
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.ext.cutlass").set_body_typed(CUTLASSCompiler);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.ext.cutlass", CUTLASSCompiler);
+});
 
 }  // namespace contrib
 }  // namespace relax

@@ -30,6 +30,7 @@
 #include <llvm/IR/GlobalValue.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Intrinsics.h>
+#include <tvm/ffi/reflection/registry.h>
 #if TVM_LLVM_VERSION >= 100
 #include <llvm/IR/IntrinsicsAMDGPU.h>
 #endif
@@ -262,7 +263,7 @@ class CodeGenAMDGPU : public CodeGenLLVM {
   }
 };
 
-runtime::Module BuildAMDGPU(IRModule mod, Target target) {
+ffi::Module BuildAMDGPU(IRModule mod, Target target) {
   LLVMInstance llvm_instance;
 
   With<LLVMTarget> llvm_target(llvm_instance, target);
@@ -283,7 +284,11 @@ runtime::Module BuildAMDGPU(IRModule mod, Target target) {
 
   for (auto& bitcode_path : bitcode_files) {
     std::unique_ptr<llvm::Module> mlib = llvm_instance.LoadIR(bitcode_path);
+#if TVM_LLVM_VERSION >= 210
+    mlib->setTargetTriple(llvm::Triple(llvm_target->GetTargetTriple()));
+#else
     mlib->setTargetTriple(llvm_target->GetTargetTriple());
+#endif
     mlib->setDataLayout(tm->createDataLayout());
 
     for (llvm::Function& f : mlib->functions()) {
@@ -356,12 +361,14 @@ runtime::Module BuildAMDGPU(IRModule mod, Target target) {
   return ROCMModuleCreate(hsaco, "hsaco", ExtractFuncInfo(mod), ll, assembly);
 }
 
-TVM_FFI_REGISTER_GLOBAL("target.build.rocm").set_body_typed(BuildAMDGPU);
-
-TVM_FFI_REGISTER_GLOBAL("tvm.codegen.llvm.target_rocm")
-    .set_body_packed([](const ffi::PackedArgs& targs, ffi::Any* rv) {
-      *rv = static_cast<void*>(new CodeGenAMDGPU());
-    });
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def("target.build.rocm", BuildAMDGPU)
+      .def_packed("tvm.codegen.llvm.target_rocm", [](const ffi::PackedArgs& targs, ffi::Any* rv) {
+        *rv = static_cast<void*>(new CodeGenAMDGPU());
+      });
+});
 
 }  // namespace codegen
 }  // namespace tvm

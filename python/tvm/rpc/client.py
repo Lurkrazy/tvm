@@ -22,7 +22,7 @@ import stat
 import struct
 import time
 
-import tvm.ffi
+import tvm_ffi
 from tvm.base import TVMError
 from tvm.contrib import utils
 from tvm.runtime import ndarray as nd
@@ -55,7 +55,7 @@ class RPCSession(object):
         --------
         tvm.runtime.system_lib
         """
-        return self.get_function("runtime.SystemLib")()
+        return self.get_function("ffi.SystemLib")()
 
     def get_function(self, name):
         """Get function from the session.
@@ -263,7 +263,7 @@ class LocalSession(RPCSession):
         RPCSession.__init__(self, _ffi_api.LocalSession())
 
 
-@tvm.ffi.register_func("rpc.PopenSession")
+@tvm_ffi.register_func("rpc.PopenSession")
 def _popen_session(binary):
     temp = utils.tempdir()
 
@@ -380,7 +380,12 @@ class TrackerSession(object):
         return res
 
     def request(
-        self, key, priority=1, session_timeout=0, max_retry=5, session_constructor_args=None
+        self,
+        key,
+        priority=1,
+        session_timeout=0,
+        max_retry=5,
+        session_constructor_args=None,
     ):
         """Request a new connection from the tracker.
 
@@ -474,7 +479,12 @@ class TrackerSession(object):
 
 
 def connect(
-    url, port, key="", session_timeout=0, session_constructor_args=None, enable_logging=False
+    url,
+    port,
+    key="",
+    session_timeout=0,
+    session_constructor_args=None,
+    enable_logging=False,
 ):
     """Connect to RPC Server
 

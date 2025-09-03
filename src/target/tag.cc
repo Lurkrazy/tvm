@@ -23,6 +23,7 @@
  */
 
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/expr.h>
 #include <tvm/target/tag.h>
 #include <tvm/target/target.h>
@@ -33,10 +34,12 @@ namespace tvm {
 
 TVM_FFI_STATIC_INIT_BLOCK({ TargetTagNode::RegisterReflection(); });
 
-TVM_REGISTER_NODE_TYPE(TargetTagNode);
-
-TVM_FFI_REGISTER_GLOBAL("target.TargetTagListTags").set_body_typed(TargetTag::ListTags);
-TVM_FFI_REGISTER_GLOBAL("target.TargetTagAddTag").set_body_typed(TargetTag::AddTag);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def("target.TargetTagListTags", TargetTag::ListTags)
+      .def("target.TargetTagAddTag", TargetTag::AddTag);
+});
 
 /**********  Registry-related code  **********/
 
@@ -268,6 +271,8 @@ TVM_REGISTER_CUDA_TAG("nvidia/nvs-5200m", "sm_21", 49152, 32768);
 TVM_REGISTER_CUDA_TAG("nvidia/nvs-4200m", "sm_21", 49152, 32768);
 TVM_REGISTER_CUDA_TAG("nvidia/geforce-rtx-4090", "sm_89", 49152, 65536)
     .with_config("l2_cache_size_bytes", 75497472);
+TVM_REGISTER_CUDA_TAG("nvidia/geforce-rtx-5060-ti", "sm_120", 49152, 65536)
+    .with_config("l2_cache_size_bytes", 33554432);
 TVM_REGISTER_CUDA_TAG("nvidia/geforce-rtx-3090-ti", "sm_86", 49152, 65536);
 TVM_REGISTER_CUDA_TAG("nvidia/geforce-rtx-3090", "sm_86", 49152, 65536);
 TVM_REGISTER_CUDA_TAG("nvidia/geforce-rtx-3080-ti", "sm_86", 49152, 65536);

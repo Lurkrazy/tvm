@@ -21,6 +21,7 @@
  * \file src/relax/backend/contrib/hipblas/codegen.cc
  * \brief Implementation of the HIPBLAS JSON serializer.
  */
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/module.h>
 
 #include <string>
@@ -51,7 +52,7 @@ class HipblasJSONSerializer : public JSONSerializer {
     ICHECK(fn.defined()) << "Expects the callee to be a function.";
 
     auto composite_opt = fn->GetAttr<String>(attr::kComposite);
-    ICHECK(composite_opt.defined()) << "Only composite functions are supported.";
+    ICHECK(composite_opt.has_value()) << "Only composite functions are supported.";
 
     std::string composite_name = composite_opt.value();
 
@@ -85,9 +86,9 @@ class HipblasJSONSerializer : public JSONSerializer {
   Map<Var, Expr> bindings_;
 };
 
-Array<runtime::Module> HipblasCompiler(Array<Function> functions, Map<String, ffi::Any> /*unused*/,
-                                       Map<Constant, String> constant_names) {
-  Array<runtime::Module> compiled_functions;
+Array<ffi::Module> HipblasCompiler(Array<Function> functions, Map<String, ffi::Any> /*unused*/,
+                                   Map<Constant, String> constant_names) {
+  Array<ffi::Module> compiled_functions;
 
   for (const auto& func : functions) {
     HipblasJSONSerializer serializer(constant_names, AnalyzeVar2Value(func));
@@ -96,13 +97,16 @@ Array<runtime::Module> HipblasCompiler(Array<Function> functions, Map<String, ff
     auto constant_names = serializer.GetConstantNames();
     const auto pf = tvm::ffi::Function::GetGlobalRequired("runtime.HipblasJSONRuntimeCreate");
     auto func_name = GetExtSymbol(func);
-    compiled_functions.push_back(pf(func_name, graph_json, constant_names).cast<runtime::Module>());
+    compiled_functions.push_back(pf(func_name, graph_json, constant_names).cast<ffi::Module>());
   }
 
   return compiled_functions;
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.ext.hipblas").set_body_typed(HipblasCompiler);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.ext.hipblas", HipblasCompiler);
+});
 
 }  // namespace contrib
 }  // namespace relax

@@ -24,10 +24,9 @@
 #ifndef TVM_RELAX_IR_DATAFLOW_REWRITER_H_
 #define TVM_RELAX_IR_DATAFLOW_REWRITER_H_
 
-#include <tvm/ffi/reflection/reflection.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/expr.h>
 #include <tvm/ir/transform.h>
-#include <tvm/node/reflection.h>
 #include <tvm/relax/expr.h>
 
 #include <optional>

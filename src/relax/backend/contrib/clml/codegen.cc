@@ -21,6 +21,7 @@
  * \file src/relax/backend/contrib/clml/codegen.cc
  * \brief Implementation of the OpenCLML JSON serializer.
  */
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/module.h>
 #include <tvm/ir/transform.h>
 #include <tvm/relax/type.h>
@@ -60,7 +61,6 @@ class OpenCLMLCompilerConfig : public Attrs {
 
 TVM_FFI_STATIC_INIT_BLOCK({ OpenCLMLCompilerConfigNode::RegisterReflection(); });
 
-TVM_REGISTER_NODE_TYPE(OpenCLMLCompilerConfigNode);
 TVM_REGISTER_PASS_CONFIG_OPTION("relax.ext.clml.options", OpenCLMLCompilerConfig);
 
 using JSONGraphNode = tvm::runtime::json::JSONGraphNode;
@@ -138,7 +138,7 @@ class OpenCLMLJSONSerializer : public JSONSerializer {
     const auto fn = Downcast<Function>(bindings_[GetRef<Var>(fn_var)]);
 
     auto opt_composite = fn->GetAttr<String>(attr::kComposite);
-    ICHECK(opt_composite.defined());
+    ICHECK(opt_composite.has_value());
     std::string name = opt_composite.value();
 
     std::shared_ptr<JSONGraphNode> node;
@@ -193,7 +193,7 @@ class OpenCLMLJSONSerializer : public JSONSerializer {
     ICHECK(fn_var);
     const auto fn = Downcast<Function>(bindings_[GetRef<Var>(fn_var)]);
     auto opt_composite = fn->GetAttr<String>(attr::kComposite);
-    ICHECK(opt_composite.defined());
+    ICHECK(opt_composite.has_value());
 
     nodes.pad = backend::TryGetOpInFunction(fn, "relax.nn.pad");
     nodes.conv = backend::TryGetOpInFunction(fn, "relax.nn.conv2d");
@@ -222,7 +222,7 @@ class OpenCLMLJSONSerializer : public JSONSerializer {
     ICHECK(fn_var);
     const auto fn = Downcast<Function>(bindings_[GetRef<Var>(fn_var)]);
     auto opt_composite = fn->GetAttr<String>(attr::kComposite);
-    ICHECK(opt_composite.defined());
+    ICHECK(opt_composite.has_value());
     std::string name = opt_composite.value();
 
     std::vector<JSONGraphNodeEntry> inputs;
@@ -311,9 +311,9 @@ void CollectCLMLFromCompositeFunctionBody::VisitExpr_(const CallNode* call_node)
  * \param functions The extern functions to be compiled via OpenCLML
  * \return Runtime modules.
  */
-Array<runtime::Module> OpenCLMLCompiler(Array<Function> functions, Map<String, Any> /*unused*/,
-                                        Map<Constant, String> constant_names) {
-  Array<runtime::Module> compiled_functions;
+Array<ffi::Module> OpenCLMLCompiler(Array<Function> functions, Map<String, Any> /*unused*/,
+                                    Map<Constant, String> constant_names) {
+  Array<ffi::Module> compiled_functions;
   for (const auto& func : functions) {
     VLOG(1) << "OpenCLML partition:" << std::endl << func;
     OpenCLMLJSONSerializer serializer(constant_names, AnalyzeVar2Value(func));
@@ -322,13 +322,16 @@ Array<runtime::Module> OpenCLMLCompiler(Array<Function> functions, Map<String, A
     auto constant_names = serializer.GetConstantNames();
     const auto pf = tvm::ffi::Function::GetGlobalRequired("runtime.clml_runtime_create");
     std::string func_name = GetExtSymbol(func);
-    VLOG(1) << "Creating clml runtime::Module for '" << func_name << "'";
-    compiled_functions.push_back(pf(func_name, graph_json, constant_names).cast<runtime::Module>());
+    VLOG(1) << "Creating clml ffi::Module for '" << func_name << "'";
+    compiled_functions.push_back(pf(func_name, graph_json, constant_names).cast<ffi::Module>());
   }
   return compiled_functions;
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.ext.openclml").set_body_typed(OpenCLMLCompiler);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.ext.openclml", OpenCLMLCompiler);
+});
 
 /*!
  * \brief Check whether OpenCLML graph executor is enabled.
@@ -354,9 +357,12 @@ Integer GetOpenCLMLVersion() {
 #endif  // TVM_GRAPH_EXECUTOR_CLML
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.is_openclml_runtime_enabled")
-    .set_body_typed(IsOpenCLMLRuntimeEnabled);
-TVM_FFI_REGISTER_GLOBAL("relax.get_openclml_version").set_body_typed(GetOpenCLMLVersion);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def("relax.is_openclml_runtime_enabled", IsOpenCLMLRuntimeEnabled)
+      .def("relax.get_openclml_version", GetOpenCLMLVersion);
+});
 
 }  // namespace contrib
 }  // namespace relax

@@ -18,14 +18,13 @@
  * under the License.
  */
 /*
- * \file src/ffi/ffi_api.cc
- * \brief Extra ffi apis for frontend to access containers.
+ * \file src/ffi/container.cc
  */
 #include <tvm/ffi/container/array.h>
 #include <tvm/ffi/container/map.h>
 #include <tvm/ffi/container/shape.h>
 #include <tvm/ffi/function.h>
-#include <tvm/ffi/reflection/reflection.h>
+#include <tvm/ffi/reflection/registry.h>
 
 namespace tvm {
 namespace ffi {

@@ -16,6 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/relax/analysis.h>
 #include <tvm/relax/attrs/op.h>
 #include <tvm/relax/expr_functor.h>
@@ -846,7 +847,7 @@ class FusedTIRConstructor : public ExprVisitor {
     if (is_inplace) {
       const auto* attrs = call->attrs.as<CallTIRInplaceAttrs>();
       CHECK(attrs) << "Must have CallTIRInplaceAttrs for an in-place call";
-      output_idxs = std::move(GetInplaceOutputIndices(attrs->inplace_indices, num_inputs));
+      output_idxs = GetInplaceOutputIndices(attrs->inplace_indices, num_inputs);
     } else {
       for (size_t i = 0; i < output_size; i++) {
         output_idxs.push_back(num_inputs + i);
@@ -1267,7 +1268,10 @@ Pass FuseTIR() {
       "FuseTIR");
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.transform.FuseTIR").set_body_typed(FuseTIR);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.transform.FuseTIR", FuseTIR);
+});
 
 }  // namespace transform
 

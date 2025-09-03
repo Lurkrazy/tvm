@@ -26,6 +26,7 @@
 #include <tensorflow/lite/kernels/register.h>
 #include <tensorflow/lite/model.h>
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 
 namespace tvm {
 namespace runtime {
@@ -86,6 +87,7 @@ DataType TfLiteDType2TVMDType(TfLiteType dtype) {
       return DataType::Float(16);
     default:
       LOG(FATAL) << "tflite data type not support yet: " << dtype;
+      TVM_FFI_UNREACHABLE();
   }
 }
 
@@ -150,8 +152,8 @@ NDArray TFLiteRuntime::GetOutput(int index) const {
   return ret;
 }
 
-ffi::Function TFLiteRuntime::GetFunction(const String& name,
-                                         const ObjectPtr<Object>& sptr_to_self) {
+ffi::Optional<ffi::Function> TFLiteRuntime::GetFunction(const String& name) {
+  ObjectPtr<Object> sptr_to_self = ffi::GetObjectPtr<Object>(this);
   // Return member functions during query.
   if (name == "set_input") {
     return ffi::Function([sptr_to_self, this](ffi::PackedArgs args, ffi::Any* rv) {
@@ -173,21 +175,24 @@ ffi::Function TFLiteRuntime::GetFunction(const String& name,
       this->SetNumThreads(num_threads);
     });
   } else {
-    return ffi::Function();
+    return std::nullopt;
   }
 }
 
-Module TFLiteRuntimeCreate(const std::string& tflite_model_bytes, Device dev) {
+ffi::Module TFLiteRuntimeCreate(const std::string& tflite_model_bytes, Device dev) {
   auto exec = make_object<TFLiteRuntime>();
   exec->Init(tflite_model_bytes, dev);
-  return Module(exec);
+  return ffi::Module(exec);
 }
 
-TVM_FFI_REGISTER_GLOBAL("tvm.tflite_runtime.create")
-    .set_body_packed([](ffi::PackedArgs args, ffi::Any* rv) {
-      *rv = TFLiteRuntimeCreate(args[0].cast<std::string>(), args[1].cast<Device>());
-    });
-
-TVM_FFI_REGISTER_GLOBAL("target.runtime.tflite").set_body_typed(TFLiteRuntimeCreate);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def_packed("tvm.tflite_runtime.create",
+                  [](ffi::PackedArgs args, ffi::Any* rv) {
+                    *rv = TFLiteRuntimeCreate(args[0].cast<std::string>(), args[1].cast<Device>());
+                  })
+      .def("target.runtime.tflite", TFLiteRuntimeCreate);
+});
 }  // namespace runtime
 }  // namespace tvm

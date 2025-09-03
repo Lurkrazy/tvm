@@ -37,7 +37,6 @@ namespace vm {
 //---------------------------------------------
 // VM Closure object
 //---------------------------------------------
-TVM_REGISTER_OBJECT_TYPE(VMClosureObj);
 
 VMClosure::VMClosure(String func_name, ffi::Function impl) {
   auto ptr = make_object<VMClosureObj>();
@@ -75,7 +74,7 @@ ffi::Any IndexIntoNestedObject(ffi::Any obj, ffi::PackedArgs args, int starting_
       LOG(FATAL) << "ValueError: Attempted to index into an object that is not an Array.";
     }
     int index = args[i].cast<int>();
-    auto arr = Downcast<ffi::Array<ffi::Any>>(obj);
+    auto arr = obj.cast<ffi::Array<ffi::Any>>();
     // make sure the index is in bounds
     if (index >= static_cast<int>(arr.size())) {
       LOG(FATAL) << "IndexError: Invalid index (" << index << " >= " << arr.size() << ").";
@@ -97,10 +96,10 @@ NDArray ConvertNDArrayToDevice(NDArray src, const DLDevice& dev, Allocator* allo
 
 Any ConvertObjectToDevice(Any src, const Device& dev, Allocator* alloc) {
   if (src.as<NDArray::ContainerType>()) {
-    return ConvertNDArrayToDevice(Downcast<NDArray>(src), dev, alloc);
+    return ConvertNDArrayToDevice(src.cast<NDArray>(), dev, alloc);
   } else if (src.as<ffi::ArrayObj>()) {
     std::vector<Any> ret;
-    auto arr = Downcast<ffi::Array<Any>>(src);
+    auto arr = src.cast<ffi::Array<Any>>();
     for (size_t i = 0; i < arr.size(); i++) {
       ret.push_back(ConvertObjectToDevice(arr[i], dev, alloc));
     }
@@ -301,12 +300,13 @@ class VirtualMachineImpl : public VirtualMachine {
    * \param name The name of the function.
    * \return The result function, can return ffi::Function(nullptr) if nothing is found.
    */
-  ffi::Function GetFuncFromImports(const String& name) {
+  Optional<ffi::Function> GetFuncFromImports(const String& name) {
     for (auto& lib : this->imports_) {
-      ffi::Function func = lib->GetFunction(name, true);
-      if (func.defined()) return func;
+      if (auto opt_func = lib.cast<ffi::Module>()->GetFunction(name, true)) {
+        return *opt_func;
+      }
     }
-    return ffi::Function(nullptr);
+    return std::nullopt;
   }
   /*!
    * \brief Initialize function pool.
@@ -453,7 +453,7 @@ class VirtualMachineImpl : public VirtualMachine {
 
 void VirtualMachineImpl::LoadExecutable(ObjectPtr<VMExecutable> exec) {
   this->exec_ = exec;
-  this->imports_ = exec_->imports();
+  this->imports_ = exec->imports();
 }
 
 void VirtualMachineImpl::Init(const std::vector<Device>& devices,
@@ -509,7 +509,7 @@ void VirtualMachineImpl::SetInput(std::string func_name, bool with_param_module,
     for (int i = 0; i < args.size(); ++i) {
       if (with_param_module && i == args.size() - 1) {
         // call param func to get the arguments(usually corresponds to param pack.)
-        func_args[i] = (args[i].cast<Module>()).GetFunction("get_params")();
+        func_args[i] = (args[i].cast<ffi::Module>())->GetFunction("get_params").value()();
       } else {
         func_args[i] = ConvertArgToDevice(args[i], devices[0], allocators[0]);
       }
@@ -621,9 +621,9 @@ Optional<VMClosure> VirtualMachineImpl::GetClosureInternal(const String& func_na
   } else {
     ICHECK(finfo.kind == VMFuncInfo::FuncKind::kVMTIRFunc)
         << "Cannot support closure with function kind " << static_cast<int>(finfo.kind);
-    ffi::Function tir_func = GetFuncFromImports("__vmtir__" + finfo.name);
-    ICHECK(tir_func != nullptr) << "Cannot find underlying compiled tir function of VMTIRFunc "
-                                << finfo.name;
+    Optional<ffi::Function> tir_func = GetFuncFromImports("__vmtir__" + finfo.name);
+    ICHECK(tir_func.has_value()) << "Cannot find underlying compiled tir function of VMTIRFunc "
+                                 << finfo.name;
     auto impl = ffi::Function([this, finfo, tir_func](ffi::PackedArgs args, ffi::Any* rv) {
       // Per convention, ctx ptr is a VirtualMachine*
       VirtualMachine* ctx_ptr = static_cast<VirtualMachine*>(args[0].cast<void*>());
@@ -638,8 +638,8 @@ Optional<VMClosure> VirtualMachineImpl::GetClosureInternal(const String& func_na
       void* reg_anylist_handle = reg_file.data();
       void* const_anylist_handle = this->const_pool_.data();
       void* func_anylist_handle = this->func_pool_.data();
-      tir_func(static_cast<void*>(ctx_ptr), reg_anylist_handle, const_anylist_handle,
-               func_anylist_handle);
+      (*tir_func)(static_cast<void*>(ctx_ptr), reg_anylist_handle, const_anylist_handle,
+                  func_anylist_handle);
       // Return value always stored after inputs.
       *rv = reg_file[finfo.num_args];
     });
@@ -697,16 +697,16 @@ void VirtualMachineImpl::InitFuncPool() {
     const VMFuncInfo& info = exec_->func_table[func_index];
     if (info.kind == VMFuncInfo::FuncKind::kPackedFunc) {
       // only look through imports first
-      ffi::Function func = GetFuncFromImports(info.name);
-      if (!func.defined()) {
+      Optional<ffi::Function> func = GetFuncFromImports(info.name);
+      if (!func.has_value()) {
         const auto p_func = tvm::ffi::Function::GetGlobal(info.name);
-        if (p_func.has_value()) func = *(p_func);
+        if (p_func.has_value()) func = *p_func;
       }
-      ICHECK(func.defined())
+      ICHECK(func.has_value())
           << "Error: Cannot find ffi::Function " << info.name
           << " in either Relax VM kernel library, or in TVM runtime ffi::Function registry, or in "
              "global Relax functions of the VM executable";
-      func_pool_[func_index] = func;
+      func_pool_[func_index] = *func;
 
     } else {
       ICHECK(info.kind == VMFuncInfo::FuncKind::kVMFunc ||
@@ -952,8 +952,8 @@ std::string VirtualMachineImpl::_GetFunctionParamName(std::string func_name, int
 
 ffi::Function VirtualMachineImpl::_LookupFunction(const String& name) {
   if (Optional<VMClosure> opt = this->GetClosureInternal(name, true)) {
-    return ffi::Function([clo = opt.value(), _self = GetRef<Module>(this)](ffi::PackedArgs args,
-                                                                           ffi::Any* rv) -> void {
+    return ffi::Function([clo = opt.value(), _self = GetRef<ffi::Module>(this)](
+                             ffi::PackedArgs args, ffi::Any* rv) -> void {
       auto* self = const_cast<VirtualMachineImpl*>(_self.as<VirtualMachineImpl>());
       ICHECK(self);
       self->InvokeClosurePacked(clo, args, rv);
@@ -973,7 +973,8 @@ ffi::Function VirtualMachineImpl::_LookupFunction(const String& name) {
  */
 class VirtualMachineProfiler : public VirtualMachineImpl {
  public:
-  ffi::Function GetFunction(const String& name, const ObjectPtr<Object>& sptr_to_self) override {
+  Optional<ffi::Function> GetFunction(const String& name) override {
+    ObjectPtr<Object> sptr_to_self = ffi::GetObjectPtr<Object>(this);
     if (name == "profile") {
       return ffi::Function([sptr_to_self, this](ffi::PackedArgs args, ffi::Any* rv) {
         std::string f_name = args[0].cast<std::string>();
@@ -1018,7 +1019,7 @@ class VirtualMachineProfiler : public VirtualMachineImpl {
         }
       });
     } else {
-      return VirtualMachineImpl::GetFunction(name, sptr_to_self);
+      return VirtualMachineImpl::GetFunction(name);
     }
   }
 
@@ -1051,7 +1052,7 @@ class VirtualMachineProfiler : public VirtualMachineImpl {
         }
       }
 
-      std::unordered_map<std::string, ObjectRef> metrics;
+      std::unordered_map<std::string, ffi::Any> metrics;
       metrics["Argument Shapes"] = profiling::ShapeString(arrs);
 
       // If a suitable device is found, enable profiling.

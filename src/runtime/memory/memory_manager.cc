@@ -22,6 +22,7 @@
  * \brief Allocate and manage memory for the runtime.
  */
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/runtime/memory/memory_manager.h>
 
 #include <memory>
@@ -233,10 +234,10 @@ NDArray Allocator::Empty(ffi::Shape shape, DLDataType dtype, DLDevice dev,
   size_t size = ffi::GetDataSize(shape.Product(), dtype);
 
   Buffer buffer;
-  if (!mem_scope.defined() || mem_scope.value().empty() || mem_scope.value() == "global") {
+  if (!mem_scope.has_value() || (*mem_scope).empty() || (*mem_scope) == "global") {
     buffer = this->Alloc(dev, size, alignment, dtype);
   } else {
-    buffer = this->Alloc(dev, shape, dtype, mem_scope.value());
+    buffer = this->Alloc(dev, shape, dtype, *mem_scope);
   }
   return NDArray::FromNDAlloc(BufferAlloc(buffer), shape, dtype, dev);
 }
@@ -264,7 +265,10 @@ void Allocator::Clear() {
   // Pooled allocator will override this method.
 }
 
-TVM_FFI_REGISTER_GLOBAL("vm.builtin.memory_manager.clear").set_body_typed(MemoryManager::Clear);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("vm.builtin.memory_manager.clear", MemoryManager::Clear);
+});
 
 }  // namespace memory
 }  // namespace runtime

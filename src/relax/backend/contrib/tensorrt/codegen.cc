@@ -21,6 +21,7 @@
  * \file src/relax/backend/contrib/tensorrt/codegen.cc
  * \brief Implementation of the TensorRT JSON serializer.
  */
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/module.h>
 #include <tvm/ir/transform.h>
 // TODO(sunggg): add operator attribute when it's ready
@@ -82,7 +83,6 @@ class TensorRTCompilerConfig : public Attrs {
 
 TVM_FFI_STATIC_INIT_BLOCK({ TensorRTCompilerConfigNode::RegisterReflection(); });
 
-TVM_REGISTER_NODE_TYPE(TensorRTCompilerConfigNode);
 TVM_REGISTER_PASS_CONFIG_OPTION("relax.ext.tensorrt.options", TensorRTCompilerConfig);
 
 using JSONGraphNode = tvm::runtime::json::JSONGraphNode;
@@ -140,7 +140,7 @@ class TensorRTJSONSerializer : public JSONSerializer {
     const auto fn = Downcast<Function>(bindings_[GetRef<Var>(fn_var)]);
 
     auto opt_composite = fn->GetAttr<String>(attr::kComposite);
-    ICHECK(opt_composite.defined());
+    ICHECK(opt_composite.has_value());
     std::string name = opt_composite.value();
 
     // Collect the constants and attributes of all operator calls inside the composite body.
@@ -225,9 +225,9 @@ void CollectFromCompositeFunctionBody::VisitExpr_(const CallNode* call_node) {
  * \param functions The extern functions to be compiled via TensorRT
  * \return Runtime modules.
  */
-Array<runtime::Module> TensorRTCompiler(Array<Function> functions, Map<String, ffi::Any> /*unused*/,
-                                        Map<Constant, String> constant_names) {
-  Array<runtime::Module> compiled_functions;
+Array<ffi::Module> TensorRTCompiler(Array<Function> functions, Map<String, ffi::Any> /*unused*/,
+                                    Map<Constant, String> constant_names) {
+  Array<ffi::Module> compiled_functions;
   for (const auto& func : functions) {
     VLOG(1) << "TensorRT partition:" << std::endl << func;
     TensorRTJSONSerializer serializer(constant_names, AnalyzeVar2Value(func));
@@ -237,13 +237,16 @@ Array<runtime::Module> TensorRTCompiler(Array<Function> functions, Map<String, f
     auto constant_names = serializer.GetConstantNames();
     const auto pf = tvm::ffi::Function::GetGlobalRequired("runtime.tensorrt_runtime_create");
     std::string func_name = GetExtSymbol(func);
-    VLOG(1) << "Creating tensorrt runtime::Module for '" << func_name << "'";
-    compiled_functions.push_back(pf(func_name, graph_json, constant_names).cast<runtime::Module>());
+    VLOG(1) << "Creating tensorrt ffi::Module for '" << func_name << "'";
+    compiled_functions.push_back(pf(func_name, graph_json, constant_names).cast<ffi::Module>());
   }
   return compiled_functions;
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.ext.tensorrt").set_body_typed(TensorRTCompiler);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.ext.tensorrt", TensorRTCompiler);
+});
 
 /*!
  * \brief Check whether TensorRT graph executor is enabled.
@@ -270,9 +273,12 @@ Array<Integer> GetTensorRTVersion() {
 #endif  // TVM_GRAPH_EXECUTOR_TENSORRT
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.is_tensorrt_runtime_enabled")
-    .set_body_typed(IsTensorRTRuntimeEnabled);
-TVM_FFI_REGISTER_GLOBAL("relax.get_tensorrt_version").set_body_typed(GetTensorRTVersion);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def("relax.is_tensorrt_runtime_enabled", IsTensorRTRuntimeEnabled)
+      .def("relax.get_tensorrt_version", GetTensorRTVersion);
+});
 
 }  // namespace contrib
 }  // namespace relax

@@ -24,6 +24,7 @@
 
 #include <dmlc/parameter.h>
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/runtime/ndarray.h>
 
 #include <fstream>
@@ -64,7 +65,7 @@ class MSCTensorRTRuntime : public JSONRuntimeBase {
                               const Array<String>& const_names)
       : JSONRuntimeBase(symbol_name, graph_json, const_names) {}
 
-  ~MSCTensorRTRuntime() override {
+  ~MSCTensorRTRuntime() {
     VLOG(1) << "Destroying MSC TensorRT runtime";
     DestroyEngine();
   }
@@ -74,11 +75,11 @@ class MSCTensorRTRuntime : public JSONRuntimeBase {
    *
    * \return module type key.
    */
-  const char* type_key() const final { return "msc_tensorrt"; }
+  const char* kind() const final { return "msc_tensorrt"; }
 
   /*! \brief Get the property of the runtime module .*/
   int GetPropertyMask() const final {
-    return ModulePropertyMask::kBinarySerializable | ModulePropertyMask::kRunnable;
+    return ffi::Module::kBinarySerializable | ffi::Module::kRunnable;
   }
 
   /*!
@@ -122,15 +123,17 @@ class MSCTensorRTRuntime : public JSONRuntimeBase {
       const auto pf = tvm::ffi::Function::GetGlobal("msc_tool.callback_step");
       ICHECK(pf.has_value()) << "Cannot find msc_tool.callback_step func.";
       Map<String, runtime::NDArray> input_datas;
+      int device_id = 0;
       for (const auto& pair : input_bindings_) {
         const auto& tensor_name = engine_->getBindingName(pair.first);
         input_datas.Set(tensor_name, device_buffers_[pair.first]);
+        device_id = data_entry_[pair.first]->device.device_id;
       }
       Map<String, Map<String, runtime::NDArray>> context;
       context.Set("datas", input_datas);
       (*pf)(context, "before_forward", graph_name_, tool_tag_);
     }
-    auto tvm_stream = CUDAThreadEntry::ThreadLocal()->stream;
+    auto tvm_stream = TVMFFIEnvGetCurrentStream(kDLCUDA, device_id);
 #if TRT_VERSION_GE(6, 0, 1)
     ICHECK(context_->enqueueV2(bindings_.data(), tvm_stream, nullptr))
         << "Running TensorRT failed.";
@@ -342,17 +345,19 @@ class MSCTensorRTRuntime : public JSONRuntimeBase {
 #endif
 };
 
-runtime::Module MSCTensorRTRuntimeCreate(const String& symbol_name, const String& graph_json,
-                                         const Array<String>& const_names) {
+ffi::Module MSCTensorRTRuntimeCreate(const String& symbol_name, const String& graph_json,
+                                     const Array<String>& const_names) {
   auto n = make_object<MSCTensorRTRuntime>(symbol_name, graph_json, const_names);
-  return runtime::Module(n);
+  return ffi::Module(n);
 }
 
-TVM_FFI_REGISTER_GLOBAL("runtime.msc_tensorrt_runtime_create")
-    .set_body_typed(MSCTensorRTRuntimeCreate);
-
-TVM_FFI_REGISTER_GLOBAL("runtime.module.loadbinary_msc_tensorrt")
-    .set_body_typed(JSONRuntimeBase::LoadFromBinary<MSCTensorRTRuntime>);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def("runtime.msc_tensorrt_runtime_create", MSCTensorRTRuntimeCreate)
+      .def("ffi.Module.load_from_bytes.msc_tensorrt",
+           JSONRuntimeBase::LoadFromBytes<MSCTensorRTRuntime>);
+});
 
 }  // namespace contrib
 }  // namespace runtime

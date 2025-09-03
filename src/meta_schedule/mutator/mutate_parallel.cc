@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-#include <tvm/ffi/reflection/reflection.h>
+#include <tvm/ffi/reflection/registry.h>
 
 #include <algorithm>
 #include <unordered_map>
@@ -314,9 +314,11 @@ Mutator Mutator::MutateParallel(int64_t max_jobs_per_core) {
 }
 
 TVM_FFI_STATIC_INIT_BLOCK({ MutateParallelNode::RegisterReflection(); });
-TVM_REGISTER_NODE_TYPE(MutateParallelNode);
-TVM_FFI_REGISTER_GLOBAL("meta_schedule.MutatorMutateParallel")
-    .set_body_typed(Mutator::MutateParallel);
+
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("meta_schedule.MutatorMutateParallel", Mutator::MutateParallel);
+});
 
 }  // namespace meta_schedule
 }  // namespace tvm

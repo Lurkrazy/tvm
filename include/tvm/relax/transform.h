@@ -24,7 +24,7 @@
 #ifndef TVM_RELAX_TRANSFORM_H_
 #define TVM_RELAX_TRANSFORM_H_
 
-#include <tvm/ffi/reflection/reflection.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/transform.h>
 #include <tvm/relax/dataflow_pattern.h>
 #include <tvm/relax/expr.h>
@@ -196,7 +196,7 @@ TVM_DLL Pass EliminateCommonSubexpr(bool call_only = false);
  *
  * \return The Pass.
  */
-TVM_DLL Pass BindParams(String func_name, Map<ObjectRef, ObjectRef> params);
+TVM_DLL Pass BindParams(String func_name, Map<Any, ObjectRef> params);
 
 /*!
  * \brief Bind symbolic vars to constant shape values.
@@ -213,7 +213,7 @@ TVM_DLL Pass BindParams(String func_name, Map<ObjectRef, ObjectRef> params);
  *
  * \return The Pass.
  */
-TVM_DLL Pass BindSymbolicVars(Map<ObjectRef, PrimExpr> binding_map,
+TVM_DLL Pass BindSymbolicVars(Map<Variant<tir::Var, String>, PrimExpr> binding_map,
                               Optional<String> func_name = std::nullopt);
 
 /*!

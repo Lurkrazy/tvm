@@ -46,6 +46,10 @@ namespace builtin {
  */
 TVM_DLL const Op& ret();
 /*!
+ * \brief Return from a GPU thread.
+ */
+TVM_DLL const Op& thread_return();
+/*!
  * \brief Reinterpret the value using the target type.
  */
 TVM_DLL const Op& reinterpret();
@@ -221,7 +225,7 @@ TVM_DLL const Op& call_spirv_pure_glsl450();
 // TODO(tvm-team) revisit the builtins below
 // some of them can simply become ops with special codegen attr.
 /*!
- * \brief Prefetch a cacheline
+ * \brief same signature as llvm.prefetch
  */
 TVM_DLL const Op& prefetch();
 
@@ -980,6 +984,7 @@ enum TVMStructFieldKind : int {
   // TVMValue field
   kTVMValueContent,
   kTVMFFIAnyTypeIndex,
+  kTVMFFIAnyZeroPadding,
   kTVMFFIAnyUnionValue,
   kTVMValueKindBound_
 };

@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-#include <tvm/ffi/reflection/reflection.h>
+#include <tvm/ffi/reflection/registry.h>
 
 #include "../utils.h"
 
@@ -162,7 +162,7 @@ inline InlineType AutoInlineNode::CheckInline(const tir::Schedule& sch,
     if (producer_srefs.size() == 1 &&
         tir::IsCompleteBlock(sch->state(), producer_srefs[0], scope_block) &&
         CanReverseComputeInline(state, block_sref) &&
-        !GetAnn<String>(producer_srefs[0], tir::attr::meta_schedule_auto_tensorize).defined()) {
+        !GetAnn<String>(producer_srefs[0], tir::attr::meta_schedule_auto_tensorize).has_value()) {
       return InlineType::kInlineIntoProducer;
     }
   }
@@ -195,9 +195,11 @@ ScheduleRule ScheduleRule::AutoInline(bool into_producer,          //
 }
 
 TVM_FFI_STATIC_INIT_BLOCK({ AutoInlineNode::RegisterReflection(); });
-TVM_REGISTER_NODE_TYPE(AutoInlineNode);
-TVM_FFI_REGISTER_GLOBAL("meta_schedule.ScheduleRuleAutoInline")
-    .set_body_typed(ScheduleRule::AutoInline);
+
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("meta_schedule.ScheduleRuleAutoInline", ScheduleRule::AutoInline);
+});
 
 /*! \brief Inline blocks that produce a constant scalar. */
 class InlineConstantScalarsNode : public ScheduleRuleNode {
@@ -242,8 +244,11 @@ ScheduleRule ScheduleRule::InlineConstantScalars() {
 }
 
 TVM_FFI_STATIC_INIT_BLOCK({ InlineConstantScalarsNode::RegisterReflection(); });
-TVM_REGISTER_NODE_TYPE(InlineConstantScalarsNode);
-TVM_FFI_REGISTER_GLOBAL("meta_schedule.ScheduleRuleInlineConstantScalars")
-    .set_body_typed(ScheduleRule::InlineConstantScalars);
+
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("meta_schedule.ScheduleRuleInlineConstantScalars",
+                        ScheduleRule::InlineConstantScalars);
+});
 }  // namespace meta_schedule
 }  // namespace tvm

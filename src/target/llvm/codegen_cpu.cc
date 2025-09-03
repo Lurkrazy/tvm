@@ -43,6 +43,7 @@
 #include <llvm/IR/MDBuilder.h>
 #include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
+#include <tvm/ffi/reflection/registry.h>
 #if TVM_LLVM_VERSION >= 100
 #include <llvm/Support/Alignment.h>
 #endif
@@ -142,17 +143,17 @@ void CodeGenCPU::Init(const std::string& module_name, LLVMTarget* llvm_target,
        t_void_p_, t_int_},
       false);
   // initialize TVM runtime API
-  if (system_lib_prefix_.defined() && !target_c_runtime) {
+  if (system_lib_prefix_.has_value() && !target_c_runtime) {
     // We will need this in environment for backward registration.
     // Defined in include/tvm/runtime/c_backend_api.h:
-    // int TVMBackendRegisterSystemLibSymbol(const char* name, void* ptr);
+    // int TVMFFIEnvModRegisterSystemLibSymbol(const char* name, void* ptr);
     f_tvm_register_system_symbol_ = llvm::Function::Create(
         llvm::FunctionType::get(t_int_, {llvmGetPointerTo(t_char_, 0), t_void_p_}, false),
-        llvm::Function::ExternalLinkage, "TVMBackendRegisterSystemLibSymbol", module_.get());
+        llvm::Function::ExternalLinkage, "TVMFFIEnvModRegisterSystemLibSymbol", module_.get());
   } else {
     f_tvm_register_system_symbol_ = nullptr;
   }
-  if (dynamic_lookup || system_lib_prefix_.defined()) {
+  if (dynamic_lookup || system_lib_prefix_.has_value()) {
     f_tvm_ffi_func_call_ =
         llvm::Function::Create(ftype_tvm_ffi_func_call_, llvm::Function::ExternalLinkage,
                                "TVMFFIFunctionCall", module_.get());
@@ -228,28 +229,42 @@ void CodeGenCPU::AddFunction(const GlobalVar& gvar, const PrimFunc& func) {
 }
 
 void CodeGenCPU::AddMainFunction(const std::string& entry_func_name) {
-  llvm::Function* f = module_->getFunction(entry_func_name);
-  ICHECK(f) << "Function " << entry_func_name << "does not in module";
-  llvm::Type* type = llvm::ArrayType::get(t_char_, entry_func_name.length() + 1);
-  llvm::GlobalVariable* global =
-      new llvm::GlobalVariable(*module_, type, true, llvm::GlobalValue::WeakAnyLinkage, nullptr,
-                               runtime::symbol::tvm_module_main);
-#if TVM_LLVM_VERSION >= 100
-  global->setAlignment(llvm::Align(1));
-#else
-  global->setAlignment(1);
-#endif
-  // comdat is needed for windows select any linking to work
-  // set comdat to Any(weak linking)
+  // create a wrapper function with tvm_ffi_main name and redirects to the entry function
+  llvm::Function* target_func = module_->getFunction(entry_func_name);
+  ICHECK(target_func) << "Function " << entry_func_name << " does not exist in module";
+
+  // Create wrapper function
+  llvm::Function* wrapper_func =
+      llvm::Function::Create(target_func->getFunctionType(), llvm::Function::WeakAnyLinkage,
+                             ffi::symbol::tvm_ffi_main, module_.get());
+
+  // Set attributes (Windows comdat, DLL export, etc.)
   if (llvm_target_->GetOrCreateTargetMachine()->getTargetTriple().isOSWindows()) {
-    llvm::Comdat* comdat = module_->getOrInsertComdat(runtime::symbol::tvm_module_main);
+    llvm::Comdat* comdat = module_->getOrInsertComdat(ffi::symbol::tvm_ffi_main);
     comdat->setSelectionKind(llvm::Comdat::Any);
-    global->setComdat(comdat);
+    wrapper_func->setComdat(comdat);
   }
 
-  global->setInitializer(
-      llvm::ConstantDataArray::getString(*llvm_target_->GetContext(), entry_func_name));
-  global->setDLLStorageClass(llvm::GlobalVariable::DLLExportStorageClass);
+  wrapper_func->setCallingConv(llvm::CallingConv::C);
+  wrapper_func->setDLLStorageClass(llvm::GlobalValue::DLLStorageClassTypes::DLLExportStorageClass);
+
+  // Create simple tail call
+  llvm::BasicBlock* entry =
+      llvm::BasicBlock::Create(*llvm_target_->GetContext(), "entry", wrapper_func);
+  builder_->SetInsertPoint(entry);
+
+  // Forward all arguments to target function
+  std::vector<llvm::Value*> call_args;
+  for (llvm::Value& arg : wrapper_func->args()) {
+    call_args.push_back(&arg);
+  }
+
+  llvm::Value* result = builder_->CreateCall(target_func, call_args);
+  if (target_func->getReturnType()->isVoidTy()) {
+    builder_->CreateRetVoid();
+  } else {
+    builder_->CreateRet(result);
+  }
 }
 
 std::unique_ptr<llvm::Module> CodeGenCPU::Finish() {
@@ -336,6 +351,11 @@ CodeGenLLVM::TypedPointer CodeGenCPU::CreateStructRefPtr(DataType t, llvm::Value
     case builtin::kTVMFFIAnyTypeIndex: {
       buf = builder_->CreatePointerCast(buf, llvmGetPointerTo(t_tvm_ffi_any_, 0));
       buf = builder_->CreateInBoundsGEP(t_tvm_ffi_any_, buf, {index, ConstInt32(0)});
+      return TypedPointer(t_int32_, buf);
+    }
+    case builtin::kTVMFFIAnyZeroPadding: {
+      buf = builder_->CreatePointerCast(buf, llvmGetPointerTo(t_tvm_ffi_any_, 0));
+      buf = builder_->CreateInBoundsGEP(t_tvm_ffi_any_, buf, {index, ConstInt32(1)});
       return TypedPointer(t_int32_, buf);
     }
     case builtin::kTVMFFIAnyUnionValue: {
@@ -434,8 +454,7 @@ llvm::Value* CodeGenCPU::GetContextPtr(llvm::GlobalVariable* gv) {
 }
 
 void CodeGenCPU::InitGlobalContext(bool dynamic_lookup) {
-  std::string ctx_symbol =
-      system_lib_prefix_.value_or("") + tvm::runtime::symbol::tvm_ffi_library_ctx;
+  std::string ctx_symbol = system_lib_prefix_.value_or("") + ffi::symbol::tvm_ffi_library_ctx;
   // Module context
   gv_mod_ctx_ = InitContextPtr(t_void_p_, ctx_symbol);
   // Register back the locations.
@@ -1161,10 +1180,13 @@ void CodeGenCPU::VisitStmt_(const ForNode* op) {
   }
 }
 
-TVM_FFI_REGISTER_GLOBAL("tvm.codegen.llvm.target_cpu")
-    .set_body_packed([](const ffi::PackedArgs& targs, ffi::Any* rv) {
-      *rv = static_cast<void*>(new CodeGenCPU());
-    });
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def_packed("tvm.codegen.llvm.target_cpu",
+                               [](const ffi::PackedArgs& targs, ffi::Any* rv) {
+                                 *rv = static_cast<void*>(new CodeGenCPU());
+                               });
+});
 
 }  // namespace codegen
 }  // namespace tvm

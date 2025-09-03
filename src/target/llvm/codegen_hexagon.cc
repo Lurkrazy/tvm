@@ -29,6 +29,7 @@
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Intrinsics.h>
+#include <tvm/ffi/reflection/registry.h>
 #if TVM_LLVM_VERSION >= 100
 #include <llvm/IR/IntrinsicsHexagon.h>
 #endif
@@ -439,7 +440,7 @@ void ProcessLLVMOptions(const std::vector<std::string>& llvm_vec) {
 }
 }  // namespace
 
-runtime::Module BuildHexagon(IRModule mod, Target target) {
+ffi::Module BuildHexagon(IRModule mod, Target target) {
   LLVMInstance llvm_instance;
   With<LLVMTarget> llvm_target(llvm_instance, target);
 
@@ -494,7 +495,7 @@ runtime::Module BuildHexagon(IRModule mod, Target target) {
     auto f = Downcast<PrimFunc>(kv.second);
     if (f->HasNonzeroAttr(tir::attr::kIsEntryFunc)) {
       auto global_symbol = f->GetAttr<String>(tvm::attr::kGlobalSymbol);
-      ICHECK(global_symbol.defined());
+      ICHECK(global_symbol.has_value());
       entry_func = global_symbol.value();
     }
   }
@@ -589,12 +590,15 @@ runtime::Module BuildHexagon(IRModule mod, Target target) {
   return HexagonModuleCreate(so_name, "so", ExtractFuncInfo(mod), asm_str, obj_str, ir_str, bc_str);
 }
 
-TVM_FFI_REGISTER_GLOBAL("target.build.hexagon").set_body_typed(BuildHexagon);
-
-TVM_FFI_REGISTER_GLOBAL("tvm.codegen.llvm.target_hexagon")
-    .set_body_packed([](const ffi::PackedArgs& targs, ffi::Any* rv) {
-      *rv = static_cast<void*>(new CodeGenHexagon());
-    });
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def("target.build.hexagon", BuildHexagon)
+      .def_packed("tvm.codegen.llvm.target_hexagon",
+                  [](const ffi::PackedArgs& targs, ffi::Any* rv) {
+                    *rv = static_cast<void*>(new CodeGenHexagon());
+                  });
+});
 
 }  // namespace codegen
 }  // namespace tvm

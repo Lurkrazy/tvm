@@ -18,6 +18,7 @@
  */
 #include "trace_apply.h"
 
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/tir/analysis.h>
 #include <tvm/tir/stmt_functor.h>
 
@@ -56,7 +57,6 @@ void InlinePostBlocks(Schedule sch, Trace anchor_trace, Target target) {
   for (const auto& inst : anchor_trace->insts) {
     if (inst->kind.same_as(kind_get_block)) {
       auto block_name = Downcast<String>(inst->attrs[0]);
-      ICHECK(block_name.defined());
       get_block_names.insert(block_name);
     }
   }
@@ -254,8 +254,10 @@ void ScheduleUsingAnchorTrace(Schedule sch, const Trace& anchor_trace, const tvm
   }
 }
 
-TVM_FFI_REGISTER_GLOBAL("meta_schedule.ScheduleUsingAnchorTrace")
-    .set_body_typed(ScheduleUsingAnchorTrace);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("meta_schedule.ScheduleUsingAnchorTrace", ScheduleUsingAnchorTrace);
+});
 
 }  // namespace meta_schedule
 }  // namespace tvm

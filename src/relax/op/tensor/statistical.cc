@@ -24,6 +24,8 @@
 
 #include "statistical.h"
 
+#include <tvm/ffi/reflection/registry.h>
+
 #include <string>
 #include <vector>
 
@@ -150,8 +152,6 @@ InferLayoutOutput InferLayoutStatistical(const Call& call,
                            Attrs(new_attrs));
 }
 
-TVM_REGISTER_NODE_TYPE(ScanopAttrs);
-
 StructInfo InferStructInfoScan(const Call& call, const BlockBuilder& ctx) {
   TensorStructInfo data_sinfo = GetUnaryInputTensorStructInfo(call, ctx);
   const auto* attrs = call->attrs.as<ScanopAttrs>();
@@ -191,7 +191,10 @@ Expr cumprod(Expr data, Optional<int64_t> axis, Optional<DataType> dtype, Bool e
   return Call(op, {std::move(data)}, Attrs{attrs}, {});
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.op.cumprod").set_body_typed(cumprod);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.op.cumprod", cumprod);
+});
 
 TVM_REGISTER_OP("relax.cumprod")
     .set_attrs_type<ScanopAttrs>()
@@ -211,7 +214,10 @@ Expr cumsum(Expr data, Optional<int64_t> axis, Optional<DataType> dtype, Bool ex
   return Call(op, {std::move(data)}, Attrs{attrs}, {});
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.op.cumsum").set_body_typed(cumsum);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.op.cumsum", cumsum);
+});
 
 TVM_REGISTER_OP("relax.cumsum")
     .set_attrs_type<ScanopAttrs>()
@@ -219,8 +225,6 @@ TVM_REGISTER_OP("relax.cumsum")
     .add_argument("data", "Tensor", "The input tensor.")
     .set_attr<FInferStructInfo>("FInferStructInfo", InferStructInfoScan)
     .set_attr<Bool>("FPurity", Bool(true));
-
-TVM_REGISTER_NODE_TYPE(StatisticalAttrs);
 
 RELAX_REGISTER_STATISTICAL_OP_INTERFACE(max);
 RELAX_REGISTER_STATISTICAL_OP_INTERFACE(mean);

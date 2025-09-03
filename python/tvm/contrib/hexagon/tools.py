@@ -29,7 +29,7 @@ import numpy
 
 import tvm
 import tvm.contrib.cc as cc
-from ...ffi.registry import register_func
+from tvm_ffi import register_func
 
 
 # Linking Hexagon shared libraries.
@@ -404,7 +404,7 @@ def pack_imports(
 def export_module(module, out_dir, binary_name="test_binary.so"):
     """Export Hexagon shared object to a file."""
     binary_path = pathlib.Path(out_dir) / binary_name
-    module.save(str(binary_path))
+    module.write_to_file(str(binary_path))
     return binary_path
 
 

@@ -22,6 +22,7 @@
  * \brief Pass for fuse ShapeExpr.
  */
 
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/relax/analysis.h>
 #include <tvm/relax/expr.h>
 #include <tvm/relax/expr_functor.h>
@@ -54,7 +55,7 @@ class ByocNameSetter : public ExprMutator {
         continue;
       }
       const auto& name_opt = func->GetAttr<String>(attr::kCodegen);
-      if (name_opt.defined() && name_opt.value() == target_) {
+      if (name_opt.has_value() && name_opt.value() == target_) {
         const String& func_name = target_ + "_" + std::to_string(func_cnt);
         const auto& new_func = Downcast<Function>(VisitExpr(func));
         builder_->UpdateFunction(gv, WithAttr(new_func, msc_attr::kUnique, func_name));
@@ -74,7 +75,7 @@ class ByocNameSetter : public ExprMutator {
     if (val->op->IsInstance<relax::VarNode>()) {
       ICHECK(local_funcs_.count(val->op)) << "Can not find local func " << val->op;
       const auto& name_opt = local_funcs_[val->op]->GetAttr<String>(msc_attr::kUnique);
-      if (name_opt.defined()) {
+      if (name_opt.has_value()) {
         val->span = SpanUtils::SetAttr(val->span, "name", name_opt.value());
       }
     }
@@ -101,7 +102,10 @@ Pass SetBYOCAttrs(const String& target, const String& entry_name) {
   return CreateModulePass(pass_func, 0, "SetBYOCAttrs", {});
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.transform.SetBYOCAttrs").set_body_typed(SetBYOCAttrs);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.transform.SetBYOCAttrs", SetBYOCAttrs);
+});
 
 }  // namespace transform
 }  // namespace relax

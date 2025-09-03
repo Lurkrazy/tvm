@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-#include <tvm/ffi/reflection/reflection.h>
+#include <tvm/ffi/reflection/registry.h>
 
 #include "../utils.h"
 
@@ -86,9 +86,10 @@ Database Database::UnionDatabase(Array<Database> databases) {
   return Database(n);
 }
 
-TVM_REGISTER_NODE_TYPE(UnionDatabaseNode);
-TVM_FFI_REGISTER_GLOBAL("meta_schedule.DatabaseUnionDatabase")
-    .set_body_typed(Database::UnionDatabase);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("meta_schedule.DatabaseUnionDatabase", Database::UnionDatabase);
+});
 
 TVM_FFI_STATIC_INIT_BLOCK({ UnionDatabaseNode::RegisterReflection(); });
 

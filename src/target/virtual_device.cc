@@ -22,15 +22,13 @@
  * \brief A compile time representation for where data is to be stored at runtime, and how to
  * compile code to compute it.
  */
-#include <tvm/node/reflection.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/runtime/device_api.h>
 #include <tvm/target/virtual_device.h>
 
 namespace tvm {
 
 TVM_FFI_STATIC_INIT_BLOCK({ VirtualDeviceNode::RegisterReflection(); });
-
-TVM_REGISTER_NODE_TYPE(VirtualDeviceNode);
 
 TVM_STATIC_IR_FUNCTOR(ReprPrinter, vtable)
     .set_dispatch<VirtualDeviceNode>([](const ObjectRef& ref, ReprPrinter* p) {
@@ -193,7 +191,10 @@ VirtualDevice VirtualDeviceCache::Unique(const VirtualDevice& virtual_device) {
               virtual_device->target, virtual_device->memory_scope);
 }
 
-TVM_FFI_REGISTER_GLOBAL("target.VirtualDevice_ForDeviceTargetAndMemoryScope")
-    .set_body_typed(VirtualDevice::ForDeviceTargetAndMemoryScope);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("target.VirtualDevice_ForDeviceTargetAndMemoryScope",
+                        VirtualDevice::ForDeviceTargetAndMemoryScope);
+});
 
 }  // namespace tvm

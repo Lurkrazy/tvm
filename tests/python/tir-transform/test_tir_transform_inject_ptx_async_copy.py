@@ -16,6 +16,7 @@
 # under the License.
 
 import tvm
+import tvm_ffi
 import tvm.testing
 from tvm.script import tir as T
 
@@ -393,7 +394,7 @@ def postproc_if_missing_async_support():
     # way, even though the generated code doesn't compile on platforms
     # that do not support async, the comparison against an expected
     # output can still be performed.  We cannot use
-    # `mod.get_source()`, as that contains the source after all
+    # `mod.inspect_source()`, as that contains the source after all
     # post-processing.
     original_code = None
 
@@ -421,7 +422,7 @@ def postproc_if_missing_async_support():
 
     # Restore previous postproc func to avoid impacting other tests
     if prev_postproc is None:
-        tvm.ffi.registry.remove_global_func(func_name)
+        tvm_ffi.registry.remove_global_func(func_name)
     else:
         tvm.register_func(func_name, prev_postproc, override=True)
 

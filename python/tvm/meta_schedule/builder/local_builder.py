@@ -19,7 +19,7 @@ import os
 import tempfile
 from typing import Callable, Dict, List, Optional, Union
 
-from tvm.ffi import register_func
+from tvm_ffi import register_func
 from tvm.ir import IRModule
 from tvm.runtime import Module, NDArray, load_param_dict, save_param_dict
 from tvm.target import Target
@@ -192,7 +192,7 @@ class LocalBuilder(PyBuilder):
                 )
             else:
                 raise ValueError("Unreachable: unexpected result: {map_result}")
-        del pool
+        pool.shutdown()
         return results
 
     def _sanity_check(self) -> None:
@@ -208,7 +208,7 @@ class LocalBuilder(PyBuilder):
         )
         value = pool.submit(_check, self.f_build, self.f_export)
         value.result()
-        del pool
+        pool.shutdown()
 
 
 def _worker_func(

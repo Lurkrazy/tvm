@@ -17,6 +17,7 @@
  * under the License.
  */
 
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/relax/transform.h>
 
 #include "../../meta_schedule/utils.h"
@@ -85,7 +86,7 @@ tir::PrimFunc FewShotTunePrimFunc(const tir::PrimFunc& prim_func, const Target& 
     int idx = 0;
     bool no_valid = true;  // whether there is no valid schedule in this iteration
     for (const meta_schedule::BuilderResult& builder_result : builder_results) {
-      if (!builder_result->error_msg.defined()) {
+      if (!builder_result->error_msg.has_value()) {
         results.push_back(candidates.value()[idx]->sch->mod());
         valid_count--;
         no_valid = false;
@@ -97,7 +98,7 @@ tir::PrimFunc FewShotTunePrimFunc(const tir::PrimFunc& prim_func, const Target& 
       Array<meta_schedule::RunnerInput> runner_inputs;
       int idx = 0;
       for (const meta_schedule::BuilderResult& builder_result : builder_results) {
-        if (!builder_result->error_msg.defined()) {
+        if (!builder_result->error_msg.has_value()) {
           runner_inputs.push_back(meta_schedule::RunnerInput(
               /*artifact_path=*/builder_result->artifact_path.value(),
               /*device_type=*/target->kind->name,
@@ -108,7 +109,7 @@ tir::PrimFunc FewShotTunePrimFunc(const tir::PrimFunc& prim_func, const Target& 
       Array<meta_schedule::RunnerFuture> runner_futures = runner->Run(runner_inputs);
       for (const meta_schedule::RunnerFuture& runner_future : runner_futures) {
         meta_schedule::RunnerResult runner_result = runner_future->Result();
-        if (runner_result->error_msg.defined()) {
+        if (runner_result->error_msg.has_value()) {
           costs.push_back(1e10);
         } else {
           double sum = 0;
@@ -172,7 +173,10 @@ Pass FewShotTuning(int valid_count, bool benchmark) {
                           /*required=*/{});
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.transform.FewShotTuning").set_body_typed(FewShotTuning);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.transform.FewShotTuning", FewShotTuning);
+});
 
 }  // namespace transform
 }  // namespace relax

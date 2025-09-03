@@ -56,11 +56,10 @@ class Tuple : public ObjectRef {
             typename = std::enable_if_t<(details::type_contains_v<Types, UTypes> && ...), int>>
   Tuple(Tuple<UTypes...>&& other) : ObjectRef(std::move(other)) {}
 
-  template <typename... UTypes,
-            typename = std::enable_if_t<sizeof...(Types) == sizeof...(UTypes) &&
-                                        !(sizeof...(Types) == 1 &&
-                                          (std::is_same_v<std::remove_cv_t<UTypes>, Tuple<Types>> &&
-                                           ...))>>
+  template <typename... UTypes, typename = std::enable_if_t<
+                                    sizeof...(Types) == sizeof...(UTypes) &&
+                                    !(sizeof...(Types) == 1 &&
+                                      (std::is_same_v<std::decay_t<UTypes>, Tuple<Types>> && ...))>>
   explicit Tuple(UTypes&&... args) : ObjectRef(MakeTupleNode(std::forward<UTypes>(args)...)) {}
 
   TVM_FFI_INLINE Tuple& operator=(const Tuple<Types...>& other) {
@@ -269,9 +268,5 @@ inline constexpr bool type_contains_v<Tuple<T...>, Tuple<U...>> = (type_contains
 }  // namespace details
 
 }  // namespace ffi
-
-// Expose to the tvm namespace
-// Rationale: convinience and no ambiguity
-using ffi::Tuple;
 }  // namespace tvm
 #endif  // TVM_FFI_CONTAINER_TUPLE_H_

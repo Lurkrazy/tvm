@@ -22,6 +22,7 @@
  * \brief Inline private functions to their callsite
  */
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/tir/analysis.h>
 #include <tvm/tir/builtin.h>
 #include <tvm/tir/op.h>
@@ -102,7 +103,7 @@ bool IsInlinablePrimFunc(const GlobalVar& gvar, const PrimFunc& prim_func,
   // Only inline private functions.  Externally-exposed functions
   // must be preserved so to avoid breaking callsites outside of
   // the IRModule.
-  bool is_exposed = prim_func->GetAttr<String>(tvm::attr::kGlobalSymbol).defined();
+  bool is_exposed = prim_func->GetAttr<String>(tvm::attr::kGlobalSymbol).has_value();
   if (is_exposed) return false;
 
   // We do not currently implement any analysis for termination of
@@ -292,8 +293,10 @@ Pass InlinePrivateFunctions() {
   return tvm::transform::CreateModulePass(pass_func, 0, "tir.InlinePrivateFunctions", {});
 }
 
-TVM_FFI_REGISTER_GLOBAL("tir.transform.InlinePrivateFunctions")
-    .set_body_typed(InlinePrivateFunctions);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("tir.transform.InlinePrivateFunctions", InlinePrivateFunctions);
+});
 
 }  // namespace transform
 

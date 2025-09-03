@@ -22,6 +22,7 @@
  * \file inject_double_buffer.cc
  */
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/tir/op.h>
 #include <tvm/tir/stmt_functor.h>
 #include <tvm/tir/transform.h>
@@ -53,7 +54,6 @@ class InjectDoubleBufferConfig : public Attrs {
 
 TVM_FFI_STATIC_INIT_BLOCK({ InjectDoubleBufferConfigNode::RegisterReflection(); });
 
-TVM_REGISTER_NODE_TYPE(InjectDoubleBufferConfigNode);
 TVM_REGISTER_PASS_CONFIG_OPTION("tir.InjectDoubleBuffer", InjectDoubleBufferConfig);
 
 // Detect double buffer variables.
@@ -327,7 +327,10 @@ Pass InjectDoubleBuffer() {
   return CreatePrimFuncPass(pass_func, 0, "tir.InjectDoubleBuffer", {});
 }
 
-TVM_FFI_REGISTER_GLOBAL("tir.transform.InjectDoubleBuffer").set_body_typed(InjectDoubleBuffer);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("tir.transform.InjectDoubleBuffer", InjectDoubleBuffer);
+});
 
 }  // namespace transform
 

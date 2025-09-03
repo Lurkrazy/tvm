@@ -22,7 +22,9 @@
  * \brief A simple JSON runtime for CUDNN.
  */
 
+#include <tvm/ffi/extra/c_env_api.h>
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/runtime/ndarray.h>
 
 #include <cstddef>
@@ -68,7 +70,7 @@ class cuDNNJSONRuntime : public JSONRuntimeBase {
     }
   }
 
-  const char* type_key() const override { return "cudnn_json"; }  // May be overridden
+  const char* kind() const override { return "cudnn_json"; }  // May be overridden
 
   void Run() override {
     for (const auto& f : op_execs_) {
@@ -99,7 +101,9 @@ class cuDNNJSONRuntime : public JSONRuntimeBase {
   }
 
   std::function<void()> GetConv2DExec(const JSONGraphNode& node) {
-    auto* entry_ptr = tvm::contrib::CuDNNThreadEntry::ThreadLocal();
+    int device_id;
+    CUDA_CALL(cudaGetDevice(&device_id));
+    auto* entry_ptr = tvm::contrib::CuDNNThreadEntry::ThreadLocal(DLDevice{kDLCUDA, device_id});
     auto op_name = node.GetOpName();
 
     std::vector<int> input_dims, kernel_dims, output_dims;
@@ -158,7 +162,10 @@ class cuDNNJSONRuntime : public JSONRuntimeBase {
 
     int algo = best_algo.cast<int>();
     std::function<void()> op_exec = [=]() {
-      auto stream = static_cast<cudaStream_t>(GetCUDAStream());
+      int device_id;
+      CUDA_CALL(cudaGetDevice(&device_id));
+      cudaStream_t stream =
+          static_cast<cudaStream_t>(TVMFFIEnvGetCurrentStream(kDLCUDA, device_id));
       CUDNN_CALL(cudnnSetStream(entry_ptr->handle, stream));
 
       auto get_inputs = [this](const JSONGraphNode& node, bool has_bias) {
@@ -231,16 +238,19 @@ class cuDNNJSONRuntime : public JSONRuntimeBase {
   std::vector<std::function<void()>> op_execs_;
 };
 
-runtime::Module cuDNNJSONRuntimeCreate(String symbol_name, String graph_json,
-                                       const Array<String>& const_names) {
+ffi::Module cuDNNJSONRuntimeCreate(String symbol_name, String graph_json,
+                                   const Array<String>& const_names) {
   auto n = make_object<cuDNNJSONRuntime>(symbol_name, graph_json, const_names);
-  return runtime::Module(n);
+  return ffi::Module(n);
 }
 
-TVM_FFI_REGISTER_GLOBAL("runtime.cuDNNJSONRuntimeCreate").set_body_typed(cuDNNJSONRuntimeCreate);
-
-TVM_FFI_REGISTER_GLOBAL("runtime.module.loadbinary_cudnn_json")
-    .set_body_typed(JSONRuntimeBase::LoadFromBinary<cuDNNJSONRuntime>);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def("runtime.cuDNNJSONRuntimeCreate", cuDNNJSONRuntimeCreate)
+      .def("ffi.Module.load_from_bytes.cudnn_json",
+           JSONRuntimeBase::LoadFromBytes<cuDNNJSONRuntime>);
+});
 
 }  // namespace contrib
 }  // namespace runtime

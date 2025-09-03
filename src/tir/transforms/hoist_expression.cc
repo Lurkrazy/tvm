@@ -22,6 +22,7 @@
  */
 #include <tvm/arith/analyzer.h>
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/tir/analysis.h>
 #include <tvm/tir/expr.h>
 #include <tvm/tir/stmt_functor.h>
@@ -81,7 +82,7 @@ struct HoistExpressionConfigNode : public AttrsNodeReflAdapter<HoistExpressionCo
     return static_cast<int>(flag) & hoisted_let_bindings;
   }
 
-  static constexpr const char* _type_key = "tir.transforms.HoistExpressionConfig";
+  static constexpr const char* _type_key = "tir.transform.HoistExpressionConfig";
   TVM_DECLARE_FINAL_OBJECT_INFO(HoistExpressionConfigNode, Object);
 };
 
@@ -99,7 +100,6 @@ class HoistExpressionConfig : public Attrs {
 
 TVM_FFI_STATIC_INIT_BLOCK({ HoistExpressionConfigNode::RegisterReflection(); });
 
-TVM_REGISTER_NODE_TYPE(HoistExpressionConfigNode);
 TVM_REGISTER_PASS_CONFIG_OPTION("tir.HoistExpression", HoistExpressionConfig);
 
 struct HoistIfThenElseConfigNode : public AttrsNodeReflAdapter<HoistIfThenElseConfigNode> {
@@ -112,7 +112,7 @@ struct HoistIfThenElseConfigNode : public AttrsNodeReflAdapter<HoistIfThenElseCo
         "Hoist if cond with block scope variables", refl::DefaultValue(false));
   }
 
-  static constexpr const char* _type_key = "tir.transforms.HoistIfThenElseConfig";
+  static constexpr const char* _type_key = "tir.transform.HoistIfThenElseConfig";
   TVM_DECLARE_FINAL_OBJECT_INFO(HoistIfThenElseConfigNode, Object);
 };
 
@@ -124,7 +124,6 @@ class HoistIfThenElseConfig : public Attrs {
 
 TVM_FFI_STATIC_INIT_BLOCK({ HoistIfThenElseConfigNode::RegisterReflection(); });
 
-TVM_REGISTER_NODE_TYPE(HoistIfThenElseConfigNode);
 TVM_REGISTER_PASS_CONFIG_OPTION("tir.HoistIfThenElse", HoistIfThenElseConfig);
 
 class HoistInfoCollector : public StmtExprVisitor {
@@ -563,7 +562,10 @@ Pass HoistExpression() {
       "tir.HoistExpression");
 }
 
-TVM_FFI_REGISTER_GLOBAL("tir.transform.HoistExpression").set_body_typed(HoistExpression);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("tir.transform.HoistExpression", HoistExpression);
+});
 
 Pass HoistIfThenElse() {
   auto pass_func = [=](PrimFunc f, IRModule m, PassContext ctx) {
@@ -598,7 +600,10 @@ Pass HoistIfThenElse() {
       "tir.HoistIfThenElse");
 }
 
-TVM_FFI_REGISTER_GLOBAL("tir.transform.HoistIfThenElse").set_body_typed(HoistIfThenElse);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("tir.transform.HoistIfThenElse", HoistIfThenElse);
+});
 
 Pass HoistIfThenElseBasic() {
   auto pass_func = [=](PrimFunc f, IRModule m, PassContext ctx) {
@@ -618,7 +623,10 @@ Pass HoistIfThenElseBasic() {
       "tir.HoistIfThenElseBasic");
 }
 
-TVM_FFI_REGISTER_GLOBAL("tir.transform.HoistIfThenElseBasic").set_body_typed(HoistIfThenElseBasic);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("tir.transform.HoistIfThenElseBasic", HoistIfThenElseBasic);
+});
 
 }  // namespace transform
 

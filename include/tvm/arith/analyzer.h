@@ -25,7 +25,7 @@
 #define TVM_ARITH_ANALYZER_H_
 
 #include <tvm/arith/int_set.h>
-#include <tvm/ffi/reflection/reflection.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/expr.h>
 #include <tvm/support/with.h>
 
@@ -94,10 +94,6 @@ class ConstIntBoundNode : public Object {
         .def_ro("max_value", &ConstIntBoundNode::max_value);
   }
 
-  bool SEqualReduce(const ConstIntBoundNode* other, SEqualReducer equal) const {
-    return equal(min_value, other->min_value) && equal(max_value, other->max_value);
-  }
-
   /*! \brief Number to represent +inf */
   static const constexpr int64_t kPosInf = std::numeric_limits<int64_t>::max();
   /*!
@@ -106,6 +102,7 @@ class ConstIntBoundNode : public Object {
    */
   static const constexpr int64_t kNegInf = -kPosInf;
 
+  static constexpr TVMFFISEqHashKind _type_s_eq_hash_kind = kTVMFFISEqHashKindTreeNode;
   static constexpr const char* _type_key = "arith.ConstIntBound";
   TVM_DECLARE_FINAL_OBJECT_INFO(ConstIntBoundNode, Object);
 };
@@ -218,10 +215,7 @@ class ModularSetNode : public Object {
         .def_ro("base", &ModularSetNode::base);
   }
 
-  bool SEqualReduce(const ModularSetNode* other, SEqualReducer equal) const {
-    return equal(coeff, other->coeff) && equal(base, other->base);
-  }
-
+  static constexpr TVMFFISEqHashKind _type_s_eq_hash_kind = kTVMFFISEqHashKindTreeNode;
   static constexpr const char* _type_key = "arith.ModularSet";
   TVM_DECLARE_FINAL_OBJECT_INFO(ModularSetNode, Object);
 };

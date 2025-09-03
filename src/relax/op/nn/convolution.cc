@@ -24,6 +24,8 @@
 
 #include "convolution.h"
 
+#include <tvm/ffi/reflection/registry.h>
+
 #include <vector>
 
 namespace tvm {
@@ -38,7 +40,6 @@ TVM_FFI_STATIC_INIT_BLOCK({
 });
 
 /* relax.nn.conv1d */
-TVM_REGISTER_NODE_TYPE(Conv1DAttrs);
 
 Expr conv1d(Expr data, Expr weight, Array<IntImm> strides, Array<IntImm> padding,
             Array<IntImm> dilation, int groups, String data_layout, String kernel_layout,
@@ -59,7 +60,10 @@ Expr conv1d(Expr data, Expr weight, Array<IntImm> strides, Array<IntImm> padding
                                out_dtype.value_or(DataType::Void()), /*op_name=*/"relax.nn.conv1d");
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.op.nn.conv1d").set_body_typed(conv1d);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.op.nn.conv1d", conv1d);
+});
 
 StructInfo InferStructInfoConv1d(const Call& call, const BlockBuilder& ctx) {
   Array<TensorStructInfo> input_sinfo = GetInputTensorStructInfo(call, ctx);
@@ -195,7 +199,6 @@ TVM_REGISTER_OP("relax.nn.conv1d")
     .set_attr<Bool>("FPurity", Bool(true));
 
 /* relax.nn.conv2d */
-TVM_REGISTER_NODE_TYPE(Conv2DAttrs);
 
 Expr conv2d(Expr data, Expr weight, Array<IntImm> strides, Array<IntImm> padding,
             Array<IntImm> dilation, int groups, String data_layout, String kernel_layout,
@@ -222,7 +225,10 @@ Expr conv2d(Expr data, Expr weight, Array<IntImm> strides, Array<IntImm> padding
                                out_dtype.value_or(DataType::Void()), /*op_name=*/"relax.nn.conv2d");
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.op.nn.conv2d").set_body_typed(conv2d);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.op.nn.conv2d", conv2d);
+});
 
 StructInfo InferStructInfoConv2d(const Call& call, const BlockBuilder& ctx) {
   Array<TensorStructInfo> input_sinfo = GetInputTensorStructInfo(call, ctx);
@@ -392,7 +398,6 @@ TVM_REGISTER_OP("relax.nn.conv2d")
     .set_attr<Bool>("FPurity", Bool(true));
 
 /* relax.nn.conv3d */
-TVM_REGISTER_NODE_TYPE(Conv3DAttrs);
 
 Expr conv3d(Expr data, Expr weight, Array<IntImm> strides, Array<IntImm> padding,
             Array<IntImm> dilation, int groups, String data_layout, String kernel_layout,
@@ -421,7 +426,10 @@ Expr conv3d(Expr data, Expr weight, Array<IntImm> strides, Array<IntImm> padding
                                out_dtype.value_or(DataType::Void()), /*op_name=*/"relax.nn.conv3d");
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.op.nn.conv3d").set_body_typed(conv3d);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.op.nn.conv3d", conv3d);
+});
 
 StructInfo InferStructInfoConv3d(const Call& call, const BlockBuilder& ctx) {
   Array<TensorStructInfo> input_sinfo = GetInputTensorStructInfo(call, ctx);
@@ -567,8 +575,6 @@ TVM_REGISTER_OP("relax.nn.conv3d")
     .set_attr<FInferMixedPrecision>("FInferMixedPrecision", InferMixedPrecisionConv3d)
     .set_attr<Bool>("FPurity", Bool(true));
 
-TVM_REGISTER_NODE_TYPE(Conv1DTransposeAttrs);
-
 Expr conv1d_transpose(Expr data, Expr weight, Array<IntImm> strides, Array<IntImm> padding,
                       Array<IntImm> output_padding, Array<IntImm> dilation, int groups,
                       String data_layout, String kernel_layout, Optional<String> out_layout,
@@ -595,13 +601,16 @@ Expr conv1d_transpose(Expr data, Expr weight, Array<IntImm> strides, Array<IntIm
   attrs->groups = groups;
   attrs->data_layout = data_layout;
   attrs->kernel_layout = std::move(kernel_layout);
-  attrs->out_layout = std::move(out_layout.value_or(data_layout));
+  attrs->out_layout = out_layout.value_or(data_layout);
   attrs->out_dtype = std::move(out_dtype.value_or(DataType::Void()));
   const Op& op = Op::Get("relax.nn.conv1d_transpose");
   return Call(op, {data, weight}, Attrs(attrs), {});
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.op.nn.conv1d_transpose").set_body_typed(conv1d_transpose);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.op.nn.conv1d_transpose", conv1d_transpose);
+});
 
 StructInfo InferStructInfoConv1dTranspose(const Call& call, const BlockBuilder& ctx) {
   Array<TensorStructInfo> input_sinfo = GetInputTensorStructInfo(call, ctx);
@@ -695,7 +704,6 @@ TVM_REGISTER_OP("relax.nn.conv1d_transpose")
     .set_attr<Bool>("FPurity", Bool(true));
 
 /* relax.nn.conv2d_transpose */
-TVM_REGISTER_NODE_TYPE(Conv2DTransposeAttrs);
 
 Expr conv2d_transpose(Expr data, Expr weight, Array<IntImm> strides, Array<IntImm> padding,
                       Array<IntImm> output_padding, Array<IntImm> dilation, int groups,
@@ -732,13 +740,16 @@ Expr conv2d_transpose(Expr data, Expr weight, Array<IntImm> strides, Array<IntIm
   attrs->groups = groups;
   attrs->data_layout = data_layout;
   attrs->kernel_layout = std::move(kernel_layout);
-  attrs->out_layout = std::move(out_layout.value_or(data_layout));
+  attrs->out_layout = out_layout.value_or(data_layout);
   attrs->out_dtype = std::move(out_dtype.value_or(DataType::Void()));
   const Op& op = Op::Get("relax.nn.conv2d_transpose");
   return Call(op, {data, weight}, Attrs(attrs), {});
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.op.nn.conv2d_transpose").set_body_typed(conv2d_transpose);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.op.nn.conv2d_transpose", conv2d_transpose);
+});
 
 StructInfo InferStructInfoConv2dTranspose(const Call& call, const BlockBuilder& ctx) {
   Array<TensorStructInfo> input_sinfo = GetInputTensorStructInfo(call, ctx);

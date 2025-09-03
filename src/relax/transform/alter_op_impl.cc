@@ -24,6 +24,7 @@
  * true.
  */
 #include <tvm/arith/analyzer.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/attrs.h>
 #include <tvm/node/serialization.h>
 #include <tvm/relax/analysis.h>
@@ -122,7 +123,7 @@ class AlterOpImplMutator : public ExprMutator {
 
     // If the callee does not have kOperatorName attribute or no replacement is requested for
     // it, nothing to do here.
-    if (!maybe_op_kind.defined() || op_impl_map_.count(maybe_op_kind.value()) == 0) return call;
+    if (!maybe_op_kind.has_value() || op_impl_map_.count(maybe_op_kind.value()) == 0) return call;
     auto op_kind = maybe_op_kind.value();
 
     const auto& replacement_func = op_impl_map_[op_kind];
@@ -438,7 +439,10 @@ Pass AlterOpImpl(const Map<String, tir::PrimFunc>& op_impl_map,
                           /*required=*/{});
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.transform.AlterOpImpl").set_body_typed(AlterOpImpl);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.transform.AlterOpImpl", AlterOpImpl);
+});
 
 }  // namespace transform
 }  // namespace relax

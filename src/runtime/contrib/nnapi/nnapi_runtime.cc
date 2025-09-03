@@ -19,6 +19,7 @@
 
 #include <dlpack/dlpack.h>
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/runtime/ndarray.h>
 
 #include <algorithm>
@@ -53,7 +54,7 @@ class NNAPIRuntime : public JSONRuntimeBase {
                         const Array<String>& const_names)
       : JSONRuntimeBase(symbol_name, graph_json, const_names) {}
 
-  const char* type_key() const final { return "nnapi"; }
+  const char* kind() const final { return "nnapi"; }
 
 #ifdef TVM_GRAPH_EXECUTOR_NNAPI
   struct CompiledModel {
@@ -234,16 +235,18 @@ class NNAPIRuntime : public JSONRuntimeBase {
 #endif  // ifdef TVM_GRAPH_EXECUTOR_NNAPI
 };
 
-runtime::Module NNAPIRuntimeCreate(const String& symbol_name, const String& graph_json,
-                                   const Array<String>& const_names) {
+ffi::Module NNAPIRuntimeCreate(const String& symbol_name, const String& graph_json,
+                               const Array<String>& const_names) {
   auto n = make_object<NNAPIRuntime>(symbol_name, graph_json, const_names);
-  return runtime::Module(n);
+  return ffi::Module(n);
 }
 
-TVM_FFI_REGISTER_GLOBAL("runtime.nnapi_runtime_create").set_body_typed(NNAPIRuntimeCreate);
-
-TVM_FFI_REGISTER_GLOBAL("runtime.module.loadbinary_nnapi")
-    .set_body_typed(JSONRuntimeBase::LoadFromBinary<NNAPIRuntime>);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def("runtime.nnapi_runtime_create", NNAPIRuntimeCreate)
+      .def("ffi.Module.load_from_bytes.nnapi", JSONRuntimeBase::LoadFromBytes<NNAPIRuntime>);
+});
 
 }  // namespace contrib
 }  // namespace runtime

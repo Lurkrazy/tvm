@@ -24,6 +24,7 @@
 
 #include "codegen.h"
 
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/ir/module.h>
 #include <tvm/relax/expr.h>
 
@@ -574,20 +575,23 @@ const Map<String, String> TensorRTCodeGen::GetStepCtx() {
   return step_ctx;
 }
 
-TVM_FFI_REGISTER_GLOBAL("msc.framework.tensorrt.GetTensorRTSources")
-    .set_body_typed([](const MSCGraph& graph, const String& codegen_config,
-                       const String& print_config) -> Map<String, String> {
-      TensorRTCodeGen codegen = TensorRTCodeGen(graph, codegen_config);
-      codegen.Init();
-      return codegen.GetSources(print_config);
-    });
-
-TVM_FFI_REGISTER_GLOBAL("msc.framework.tensorrt.GetTensorRTRoot").set_body_typed([]() -> String {
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def("msc.framework.tensorrt.GetTensorRTSources",
+           [](const MSCGraph& graph, const String& codegen_config,
+              const String& print_config) -> Map<String, String> {
+             TensorRTCodeGen codegen = TensorRTCodeGen(graph, codegen_config);
+             codegen.Init();
+             return codegen.GetSources(print_config);
+           })
+      .def("msc.framework.tensorrt.GetTensorRTRoot", []() -> String {
 #ifdef TENSORRT_ROOT_DIR
-  return TENSORRT_ROOT_DIR;
+        return TENSORRT_ROOT_DIR;
 #else
   return "";
 #endif
+      });
 });
 
 /*!
@@ -595,14 +599,14 @@ TVM_FFI_REGISTER_GLOBAL("msc.framework.tensorrt.GetTensorRTRoot").set_body_typed
  * \param functions The extern functions to be compiled via TensorRT
  * \return Runtime modules.
  */
-Array<runtime::Module> MSCTensorRTCompiler(Array<Function> functions,
-                                           Map<String, ffi::Any> target_option,
-                                           Map<Constant, String> constant_names) {
-  Array<runtime::Module> compiled_functions;
+Array<ffi::Module> MSCTensorRTCompiler(Array<Function> functions,
+                                       Map<String, ffi::Any> target_option,
+                                       Map<Constant, String> constant_names) {
+  Array<ffi::Module> compiled_functions;
   for (const auto& func : functions) {
     VLOG(1) << "MSC.TensorRT partition:" << std::endl << func;
     const auto& name_opt = func->GetAttr<String>(msc_attr::kUnique);
-    ICHECK(name_opt.defined()) << "Can not find " << msc_attr::kUnique << " from attrs";
+    ICHECK(name_opt.has_value()) << "Can not find " << msc_attr::kUnique << " from attrs";
     const auto& name = name_opt.value();
     std::string func_name = GetExtSymbol(func);
     ICHECK(target_option.count(name)) << "Can not find target option for " << name;
@@ -611,14 +615,17 @@ Array<runtime::Module> MSCTensorRTCompiler(Array<Function> functions,
     serializer.serialize(func);
     std::string graph_json = serializer.GetJSON();
     const auto pf = tvm::ffi::Function::GetGlobalRequired("runtime.msc_tensorrt_runtime_create");
-    VLOG(1) << "Creating msc_tensorrt runtime::Module for '" << func_name << "'";
+    VLOG(1) << "Creating msc_tensorrt ffi::Module for '" << func_name << "'";
     compiled_functions.push_back(
-        pf(func_name, graph_json, serializer.GetConstantNames()).cast<runtime::Module>());
+        pf(func_name, graph_json, serializer.GetConstantNames()).cast<ffi::Module>());
   }
   return compiled_functions;
 }
 
-TVM_FFI_REGISTER_GLOBAL("relax.ext.msc_tensorrt").set_body_typed(MSCTensorRTCompiler);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef().def("relax.ext.msc_tensorrt", MSCTensorRTCompiler);
+});
 
 }  // namespace msc
 }  // namespace contrib

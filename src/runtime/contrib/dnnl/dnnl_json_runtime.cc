@@ -23,6 +23,7 @@
  */
 
 #include <tvm/ffi/function.h>
+#include <tvm/ffi/reflection/registry.h>
 #include <tvm/runtime/ndarray.h>
 
 #include <cstddef>
@@ -57,7 +58,7 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
     for (const auto e : outputs_) run_arg_eid_.push_back(EntryID(e));
   }
 
-  const char* type_key() const override { return "dnnl_json"; }
+  const char* kind() const override { return "dnnl_json"; }
 
   void Init(const Array<NDArray>& consts) override {
     ICHECK_EQ(consts.size(), const_idx_.size())
@@ -99,7 +100,8 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
   }
 
   /* Override GetFunction to reimplement Run method */
-  ffi::Function GetFunction(const String& name, const ObjectPtr<Object>& sptr_to_self) override {
+  ffi::Optional<ffi::Function> GetFunction(const String& name) override {
+    ObjectPtr<Object> sptr_to_self = ffi::GetObjectPtr<Object>(this);
     if (this->symbol_name_ == name) {
       return ffi::Function([sptr_to_self, this](ffi::PackedArgs args, ffi::Any* rv) {
         ICHECK(this->initialized_) << "The module has not been initialized";
@@ -110,7 +112,7 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
         Run(args);
       });
     } else {
-      return JSONRuntimeBase::GetFunction(name, sptr_to_self);
+      return JSONRuntimeBase::GetFunction(name);
     }
   }
 
@@ -921,16 +923,18 @@ class DNNLJSONRuntime : public JSONRuntimeBase {
   std::vector<uint32_t> run_arg_eid_;
 };
 
-runtime::Module DNNLJSONRuntimeCreate(String symbol_name, String graph_json,
-                                      const Array<String>& const_names) {
+ffi::Module DNNLJSONRuntimeCreate(String symbol_name, String graph_json,
+                                  const Array<String>& const_names) {
   auto n = make_object<DNNLJSONRuntime>(symbol_name, graph_json, const_names);
-  return runtime::Module(n);
+  return ffi::Module(n);
 }
 
-TVM_FFI_REGISTER_GLOBAL("runtime.DNNLJSONRuntimeCreate").set_body_typed(DNNLJSONRuntimeCreate);
-
-TVM_FFI_REGISTER_GLOBAL("runtime.module.loadbinary_dnnl_json")
-    .set_body_typed(JSONRuntimeBase::LoadFromBinary<DNNLJSONRuntime>);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def("runtime.DNNLJSONRuntimeCreate", DNNLJSONRuntimeCreate)
+      .def("ffi.Module.load_from_bytes.dnnl_json", JSONRuntimeBase::LoadFromBytes<DNNLJSONRuntime>);
+});
 
 }  // namespace contrib
 }  // namespace runtime

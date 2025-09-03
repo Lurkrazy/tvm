@@ -112,7 +112,7 @@ class FFILibrary implements Disposable {
   }
 
   private validateInstance(): void {
-    this.checkExports(["TVMWasmAllocSpace", "TVMWasmFreeSpace", "TVMFuncFree"]);
+    this.checkExports(["TVMWasmAllocSpace", "TVMWasmFreeSpace"]);
   }
 
   private checkExports(funcNames: Array<string>): void {
@@ -189,17 +189,17 @@ class RuntimeContext implements Disposable {
     this.functionListGlobalNamesFunctor = getGlobalFunc(
       "ffi.FunctionListGlobalNamesFunctor"
     );
-    this.moduleGetFunction = getGlobalFunc("runtime.ModuleGetFunction");
-    this.moduleImport = getGlobalFunc("runtime.ModuleImport");
+    this.moduleGetFunction = getGlobalFunc("ffi.ModuleGetFunction");
+    this.moduleImport = getGlobalFunc("ffi.ModuleImportModule");
     this.ndarrayEmpty = getGlobalFunc("runtime.TVMArrayAllocWithScope");
     this.ndarrayCopyFromTo = getGlobalFunc("runtime.TVMArrayCopyFromTo");
     this.ndarrayCopyFromJSBytes = getGlobalFunc("tvmjs.runtime.NDArrayCopyFromBytes");
     this.ndarrayCopyToJSBytes = getGlobalFunc("tvmjs.runtime.NDArrayCopyToBytes");
-    this.arrayGetItem = getGlobalFunc("runtime.ArrayGetItem");
-    this.arrayGetSize = getGlobalFunc("runtime.ArraySize");
-    this.arrayMake = getGlobalFunc("runtime.Array");
+    this.arrayGetItem = getGlobalFunc("ffi.ArrayGetItem");
+    this.arrayGetSize = getGlobalFunc("ffi.ArraySize");
+    this.arrayMake = getGlobalFunc("ffi.Array");
     this.arrayConcat = getGlobalFunc("tvmjs.runtime.ArrayConcat");
-    this.getSysLib = getGlobalFunc("runtime.SystemLib");
+    this.getSysLib = getGlobalFunc("ffi.SystemLib");
     this.arrayCacheGet = getGlobalFunc("vm.builtin.ndarray_cache.get");
     this.arrayCacheRemove = getGlobalFunc("vm.builtin.ndarray_cache.remove");
     this.arrayCacheUpdate = getGlobalFunc("vm.builtin.ndarray_cache.update");
@@ -450,7 +450,7 @@ export class TVMObject implements Disposable {
   dispose(): void {
     if (this.handle != 0) {
       this.lib.checkCall(
-        (this.lib.exports.TVMFFIObjectFree as ctypes.FTVMFFIObjectFree)(this.handle)
+        (this.lib.exports.TVMFFIObjectDecRef as ctypes.FTVMFFIObjectDecRef)(this.handle)
       );
       this.handle = 0;
     }
@@ -1900,7 +1900,7 @@ export class Instance implements Disposable {
       (handle: number, lib: FFILibrary, ctx: RuntimeContext) => {
         return new TVMArray(handle, lib, ctx);
       });
-    this.registerObjectConstructor("runtime.Module",
+    this.registerObjectConstructor("ffi.Module",
       (handle: number, lib: FFILibrary, ctx: RuntimeContext) => {
         return new Module(handle, lib, ctx);
       });
@@ -2019,6 +2019,7 @@ export class Instance implements Disposable {
       const tp = typeof val;
       const argOffset = packedArgs + i * SizeOf.TVMFFIAny;
       const argTypeIndexOffset = argOffset;
+      const argZeroPaddingOffset = argOffset + SizeOf.I32;
       const argValueOffset = argOffset + SizeOf.I32 * 2;
 
       // Convert string[] to a TVMArray of, hence treated as a TVMObject
@@ -2028,8 +2029,9 @@ export class Instance implements Disposable {
         val = this.makeTVMArray(tvmStringArray);
       }
 
-      // clear off the extra padding valuesbefore ptr storage
-      stack.storeI32(argTypeIndexOffset + SizeOf.I32, 0);
+      // clear off the extra zero padding before ptr storage
+      stack.storeI32(argZeroPaddingOffset, 0);
+      // clear off the extra zero padding after ptr storage
       stack.storeI32(argValueOffset + SizeOf.I32, 0);
       if (val instanceof NDArray) {
         if (!val.isView) {
@@ -2177,6 +2179,8 @@ export class Instance implements Disposable {
       const retOffset = stack.allocRawBytes(SizeOf.TVMFFIAny);
       // pre-store the result to be null
       stack.storeI32(retOffset, TypeIndex.kTVMFFINone);
+      // clear off the extra zero padding before ptr storage
+      stack.storeI32(retOffset + SizeOf.I32, 0);
       stack.commitToWasmMemory();
       this.lib.checkCall(
         (this.exports.TVMFFIFunctionCall as ctypes.FTVMFFIFunctionCall)(
@@ -2249,23 +2253,29 @@ export class Instance implements Disposable {
         const strObjPtr = this.memory.loadPointer(valuePtr);
         const result = this.memory.loadByteArrayAsString(strObjPtr + SizeOf.ObjectHeader);
         this.lib.checkCall(
-          (this.lib.exports.TVMFFIObjectFree as ctypes.FTVMFFIObjectFree)(strObjPtr)
+          (this.lib.exports.TVMFFIObjectDecRef as ctypes.FTVMFFIObjectDecRef)(strObjPtr)
         );
         return result;
+      }
+      case TypeIndex.kTVMFFISmallStr: {
+        return this.memory.loadSmallStr(resultAnyPtr);
       }
       case TypeIndex.kTVMFFIStr: {
         const strObjPtr = this.memory.loadPointer(valuePtr);
         const result = this.memory.loadByteArrayAsString(strObjPtr + SizeOf.ObjectHeader);
         this.lib.checkCall(
-          (this.lib.exports.TVMFFIObjectFree as ctypes.FTVMFFIObjectFree)(strObjPtr)
+          (this.lib.exports.TVMFFIObjectDecRef as ctypes.FTVMFFIObjectDecRef)(strObjPtr)
         );
         return result;
+      }
+      case TypeIndex.kTVMFFISmallBytes: {
+        return this.memory.loadSmallBytes(resultAnyPtr);
       }
       case TypeIndex.kTVMFFIBytes: {
         const bytesObjPtr = this.memory.loadPointer(valuePtr);
         const result = this.memory.loadByteArrayAsBytes(bytesObjPtr + SizeOf.ObjectHeader);
         this.lib.checkCall(
-          (this.lib.exports.TVMFFIObjectFree as ctypes.FTVMFFIObjectFree)(bytesObjPtr)
+          (this.lib.exports.TVMFFIObjectDecRef as ctypes.FTVMFFIObjectDecRef)(bytesObjPtr)
         );
         return result;
       }

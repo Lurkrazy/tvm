@@ -23,6 +23,8 @@
 
 #include "utils.h"
 
+#include <tvm/ffi/reflection/registry.h>
+
 #include <algorithm>
 #include <string>
 namespace tvm {
@@ -106,6 +108,7 @@ const String CommonUtils::ToAttrKey(const String& key) {
     return msc_attr::kConsumerType;
   }
   LOG_FATAL << "Unexpected key " << key;
+  TVM_FFI_UNREACHABLE();
 }
 
 bool StringUtils::Contains(const String& src_string, const String& sub_string) {
@@ -259,12 +262,12 @@ const String StringUtils::Lower(const String& src_string) {
   return str;
 }
 
-const String StringUtils::ToString(const runtime::ObjectRef& obj) {
+const String StringUtils::ToString(const ffi::Any& obj) {
   String obj_string;
-  if (!obj.defined()) {
+  if (obj == nullptr) {
     obj_string = "";
-  } else if (obj.as<ffi::StringObj>()) {
-    obj_string = Downcast<String>(obj);
+  } else if (auto opt_str = obj.as<String>()) {
+    obj_string = *opt_str;
   } else if (const auto* n = obj.as<IntImmNode>()) {
     obj_string = std::to_string(n->value);
   } else if (const auto* n = obj.as<FloatImmNode>()) {
@@ -368,7 +371,7 @@ const Span SpanUtils::SetAttr(const Span& span, const String& key, const String&
   return Span(SourceName::Get(new_source), 0, 0, 0, 0);
 }
 
-const String SpanUtils::GetAttr(const Span& span, const String& key) {
+String SpanUtils::GetAttr(const Span& span, const String& key) {
   if (span.defined() && span->source_name.defined()) {
     Array<String> tokens{"<" + key + ">", "</" + key + ">"};
     return StringUtils::GetClosureOnce(span->source_name->name, tokens[0], tokens[1]);
@@ -523,28 +526,26 @@ const DataType ExprUtils::GetDataType(const Expr& expr) {
   return Downcast<TensorStructInfo>(GetStructInfo(expr))->dtype;
 }
 
-TVM_FFI_REGISTER_GLOBAL("msc.core.SpanGetAttr").set_body_typed(SpanUtils::GetAttr);
-
-TVM_FFI_REGISTER_GLOBAL("msc.core.SpanGetAttrs").set_body_typed(SpanUtils::GetAttrs);
-
-TVM_FFI_REGISTER_GLOBAL("msc.core.SpanCreateWithAttr")
-    .set_body_typed([](const String& key, const String& value) -> Span {
-      return SpanUtils::CreateWithAttr(key, value);
-    });
-
-TVM_FFI_REGISTER_GLOBAL("msc.core.SpanSetAttr")
-    .set_body_typed([](const Span& span, const String& key, const String& value) -> Span {
-      return SpanUtils::SetAttr(span, key, value);
-    });
-
-TVM_FFI_REGISTER_GLOBAL("msc.core.CompareVersion")
-    .set_body_typed([](const Array<Integer>& given_version,
-                       const Array<Integer>& target_version) -> Integer {
-      return Integer(CommonUtils::CompareVersion(given_version, target_version));
-    });
-
-TVM_FFI_REGISTER_GLOBAL("msc.core.ToAttrKey").set_body_typed([](const String& key) -> String {
-  return CommonUtils::ToAttrKey(key);
+TVM_FFI_STATIC_INIT_BLOCK({
+  namespace refl = tvm::ffi::reflection;
+  refl::GlobalDef()
+      .def("msc.core.SpanGetAttr", SpanUtils::GetAttr)
+      .def("msc.core.SpanGetAttrs", SpanUtils::GetAttrs)
+      .def("msc.core.SpanCreateWithAttr",
+           [](const String& key, const String& value) -> Span {
+             return SpanUtils::CreateWithAttr(key, value);
+           })
+      .def("msc.core.SpanSetAttr",
+           [](const Span& span, const String& key, const String& value) -> Span {
+             return SpanUtils::SetAttr(span, key, value);
+           })
+      .def(
+          "msc.core.CompareVersion",
+          [](const Array<Integer>& given_version, const Array<Integer>& target_version) -> Integer {
+            return Integer(CommonUtils::CompareVersion(given_version, target_version));
+          })
+      .def("msc.core.ToAttrKey",
+           [](const String& key) -> String { return CommonUtils::ToAttrKey(key); });
 });
 
 }  // namespace msc
