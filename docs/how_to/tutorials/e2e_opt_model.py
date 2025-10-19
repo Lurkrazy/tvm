@@ -21,23 +21,23 @@
 End-to-End Optimize Model
 =========================
 This tutorial demonstrates how to optimize a machine learning model using Apache TVM. We will
-use a pre-trained ResNet-18 model from PyTorch and end-to-end optimize it using TVM's Relax API.
+use a pre-trained ResNet-50 model from PyTorch and end-to-end optimize it using TVM's Relax API.
 Please note that default end-to-end optimization may not suit complex models.
 """
 
 ######################################################################
 # Preparation
 # -----------
-# First, we prepare the model and input information. We use a pre-trained ResNet-18 model from
+# First, we prepare the model and input information. We use a pre-trained ResNet-50 model from
 # PyTorch.
 
 import os
 import numpy as np
 import torch
 from torch.export import export
-from torchvision.models.resnet import ResNet18_Weights, resnet18
+from torchvision.models.resnet import ResNet50_Weights, resnet50
 
-torch_model = resnet18(weights=ResNet18_Weights.DEFAULT).eval()
+torch_model = resnet50(weights=ResNet50_Weights.DEFAULT).eval()
 
 ######################################################################
 # Review Overall Flow
@@ -96,8 +96,8 @@ if not IS_IN_CI:
 # apply the database to the model to get the best performance.
 #
 
-TOTAL_TRIALS = 8000  # Change to 20000 for better performance if needed
-target = tvm.target.Target("nvidia/geforce-rtx-3090-ti")  # Change to your target device
+TOTAL_TRIALS = 20000  # Change to 20000 for better performance if needed
+target = tvm.target.Target("nvidia/geforce-rtx-4090")  # Change to your target device
 work_dir = "tuning_logs"
 
 if not IS_IN_CI:

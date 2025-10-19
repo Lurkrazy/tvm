@@ -1,0 +1,1 @@
+python3 bench_resnet18_tensorcore_pt.py --mode e2e --runs 50 --warmup 5 2>&1 | tee bench_resnet18_tensorcore_pt.log

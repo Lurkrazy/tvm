@@ -221,16 +221,10 @@ if (TVM_FFI_BUILD_PYTHON_MODULE)
   # Set RPATH for tvm_ffi_cython to find tvm_ffi_shared.so relatively
   if(APPLE)
     # macOS uses @loader_path
-    set_target_properties(tvm_ffi_cython PROPERTIES
-      INSTALL_RPATH "@loader_path/lib"
-      BUILD_WITH_INSTALL_RPATH ON
-    )
+    set_target_properties(tvm_ffi_cython PROPERTIES INSTALL_RPATH "@loader_path/lib")
   elseif(LINUX)
       # Linux uses $ORIGIN
-    set_target_properties(tvm_ffi_cython PROPERTIES
-      INSTALL_RPATH "\$ORIGIN/lib"
-      BUILD_WITH_INSTALL_RPATH ON
-    )
+    set_target_properties(tvm_ffi_cython PROPERTIES INSTALL_RPATH "\$ORIGIN/lib")
   endif()
   install(TARGETS tvm_ffi_cython DESTINATION .)
 
@@ -245,9 +239,9 @@ if (TVM_FFI_BUILD_PYTHON_MODULE)
     PATTERN "*.tmp" EXCLUDE
   )
   install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/ffi/ DESTINATION src/ffi/)
-  install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/cmake/Utils/ DESTINATION cmake/Utils/)
+  install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/cmake/Utils/ DESTINATION cmake/Utils)
   install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt DESTINATION .)
-  install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/cmake/tvm_ffi-config.cmake DESTINATION lib/cmake/tvm_ffi/)
+  install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/cmake/tvm_ffi-config.cmake DESTINATION cmake)
 endif()
 
 ########## Install the related for normal cmake library ##########

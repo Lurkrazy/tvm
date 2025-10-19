@@ -12,25 +12,29 @@
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 # KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# specific language governing permissions and limitations.
+# Base logic to load library for extension package
+import torch
+import sys
+import my_ffi_extension
 
-# Minimum docker image for demo purposes
-# CI docker GPU env
-# tag: v0.54
-FROM tlcpack/ci-gpu:v0.55
 
-COPY utils/apt-install-and-clear.sh /usr/local/bin/apt-install-and-clear
+def run_add_one():
+    x = torch.tensor([1, 2, 3, 4, 5], dtype=torch.float32)
+    y = torch.empty_like(x)
+    my_ffi_extension.add_one(x, y)
+    print(y)
 
-# Jupyter notebook.
-RUN pip3 install matplotlib Image "Pillow<7" jupyter[notebook]
 
-# Build TVM
-COPY install/install_tvm_gpu.sh /install/install_tvm_gpu.sh
-RUN bash /install/install_tvm_gpu.sh
+def run_raise_error():
+    my_ffi_extension.raise_error("This is an error")
 
-# Environment variables
-ENV PYTHONPATH=/usr/tvm/python:/usr/tvm/vta/python:${PYTHONPATH}
-ENV PATH=/usr/local/nvidia/bin:${PATH}
-ENV PATH=/usr/local/cuda/bin:${PATH}
-ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/nvidia/lib64:${LD_LIBRARY_PATH}
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "add_one":
+            run_add_one()
+        elif sys.argv[1] == "raise_error":
+            run_raise_error()
+    else:
+        print("Usage: python run_example.py <add_one|raise_error>")

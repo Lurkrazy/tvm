@@ -12,24 +12,37 @@
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 # KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# specific language governing permissions and limitations.
+from .base import _LIB
+from . import _ffi_api
 
-# Minimum docker image for demo purposes
-# prebuilt-image: tvmai/demo-cpu
-FROM tlcpack/ci-cpu:v0.55
 
-COPY utils/apt-install-and-clear.sh /usr/local/bin/apt-install-and-clear
+def add_one(x, y):
+    """
+    Adds one to the input tensor.
 
-# Jupyter notebook.
-RUN pip3 install matplotlib Image Pillow jupyter[notebook]
+    Parameters
+    ----------
+    x : Tensor
+      The input tensor.
+    y : Tensor
+      The output tensor.
+    """
+    return _LIB.add_one(x, y)
 
-# Deep learning frameworks
-RUN pip3 install tensorflow keras gluoncv dgl
 
-# Build TVM
-COPY install/install_tvm_cpu.sh /install/install_tvm_cpu.sh
-RUN bash /install/install_tvm_cpu.sh
+def raise_error(msg):
+    """
+    Raises an error with the given message.
 
-# Environment variables
-ENV PYTHONPATH=/usr/tvm/python:/usr/tvm/vta/python:${PYTHONPATH}
+    Parameters
+    ----------
+    msg : str
+        The message to raise the error with.
+
+    Raises
+    ------
+    RuntimeError
+        The error raised by the function.
+    """
+    return _ffi_api.raise_error(msg)
