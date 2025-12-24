@@ -1400,17 +1400,19 @@ struct Feature {
     }
     mlp = total_buffer_size / 32.0;
 
-    // 6. Total Reuse (harmonic mean)
+    // 6. Total Reuse (harmonic mean: n / sum(1/x_i))
     double sum_inv_reuse = 0.0;
+    int64_t n_buffers = 0;
     for (const auto& sub : sub_features) {
       if (sub.reuse_ct > 0) {
         sum_inv_reuse += 1.0 / static_cast<double>(sub.reuse_ct);
       } else {
         sum_inv_reuse += 1.0;  // Default for no reuse
       }
+      n_buffers++;
     }
-    if (sum_inv_reuse > 0) {
-      total_reuse = 1.0 / sum_inv_reuse;
+    if (sum_inv_reuse > 0 && n_buffers > 0) {
+      total_reuse = static_cast<double>(n_buffers) / sum_inv_reuse;
     }
 
     // 7. OI_Global (Operational Intensity - Global Memory)
