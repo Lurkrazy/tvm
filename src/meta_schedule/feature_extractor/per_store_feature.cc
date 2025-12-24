@@ -1251,6 +1251,200 @@ struct Feature {
 
 }  // namespace group6
 
+namespace group7 {
+
+/*!
+ * \brief Group 7 feature - GPU Performance Metrics
+ *
+ * This feature group captures GPU-specific performance characteristics that are
+ * crucial for predicting kernel performance on GPU architectures. The metrics
+ * are derived from the auto_scheduler implementation and adapted for meta_schedule.
+ */
+struct Feature {
+  /*! \brief Wave efficiency: (grid_size/num_sm) / ceil(grid_size/num_sm) */
+  double wave_efficiency = 0.0;
+  /*! \brief Estimated occupancy: (num_warp * blocks_per_sm) / max_warps_per_sm */
+  double est_occupancy = 0.0;
+  /*! \brief Instruction Level Parallelism: product of unroll/vectorize extents */
+  double ilp = 0.0;
+  /*! \brief Warp Level Parallelism: min(WLP_SM, WLP_REG) */
+  double wlp = 0.0;
+  /*! \brief Memory Level Parallelism: total_buffer_size / 32 */
+  double mlp = 0.0;
+  /*! \brief Total reuse: harmonic mean of buffer reuse factors */
+  double total_reuse = 0.0;
+  /*! \brief Operational Intensity for global memory */
+  double oi_global = 0.0;
+  /*! \brief Operational Intensity for shared memory */
+  double oi_shared = 0.0;
+
+  static constexpr int64_t kCount = 8;
+
+  void Export(std::vector<double>* v) const {
+    double vs[] = {
+        slog(wave_efficiency),
+        slog(est_occupancy),
+        slog(ilp),
+        slog(wlp),
+        slog(mlp),
+        slog(total_reuse),
+        slog(oi_global),
+        slog(oi_shared),
+    };
+    v->insert(v->end(), std::begin(vs), std::end(vs));
+  }
+
+  explicit Feature(const LoopNest& loop_nest, bool is_gpu,
+                   const group1::Feature::ArithOps& arith_ops,
+                   const std::vector<group2::Feature::SubFeature>& sub_features,
+                   int64_t num_sm = 80) {
+    if (!is_gpu) {
+      // All metrics remain 0.0 for non-GPU targets
+      return;
+    }
+
+    // Calculate grid_size (number of blocks)
+    int64_t grid_size = 1;
+    grid_size *= utils::FirstLoopExtent(loop_nest.blockIdx_x, 1);
+    grid_size *= utils::FirstLoopExtent(loop_nest.blockIdx_y, 1);
+    grid_size *= utils::FirstLoopExtent(loop_nest.blockIdx_z, 1);
+
+    // Calculate thread_block_size
+    int64_t thread_block_size = 1;
+    thread_block_size *= utils::FirstLoopExtent(loop_nest.threadIdx_x, 1);
+    thread_block_size *= utils::FirstLoopExtent(loop_nest.threadIdx_y, 1);
+    thread_block_size *= utils::FirstLoopExtent(loop_nest.threadIdx_z, 1);
+
+    // 1. Wave Efficiency
+    if (grid_size > 0 && num_sm > 0) {
+      double waves = static_cast<double>(grid_size) / num_sm;
+      double ceil_waves = std::ceil(waves);
+      wave_efficiency = (ceil_waves > 0) ? (waves / ceil_waves) : 0.0;
+    }
+
+    // 2. Estimated Occupancy
+    if (thread_block_size > 0) {
+      int64_t num_warp = (thread_block_size + 31) / 32;
+
+      // GPU resource limits (typical for modern NVIDIA GPUs)
+      constexpr int64_t max_threads_per_sm = 2048;
+      constexpr int64_t max_blocks_per_sm = 32;
+      constexpr int64_t max_warps_per_sm = 64;
+      constexpr int64_t max_shared_memory_per_sm = 49152;  // 48KB
+      constexpr int64_t max_registers_per_sm = 65536;
+
+      // Calculate blocks limited by warps
+      int64_t warps_per_block = num_warp;
+      int64_t blocks_per_sm_warps =
+          (warps_per_block > 0) ? (max_warps_per_sm / warps_per_block) : 0;
+      blocks_per_sm_warps = std::min(blocks_per_sm_warps, max_blocks_per_sm);
+
+      // Calculate shared memory usage
+      int64_t total_shared = 0;
+      for (const auto& sub : sub_features) {
+        if (sub.buffer && ffi::GetRef<Buffer>(sub.buffer).scope() == "shared") {
+          int64_t buffer_size = 1;
+          for (const auto& shape_dim : sub.buffer->shape) {
+            if (const IntImmNode* imm = shape_dim.as<IntImmNode>()) {
+              buffer_size *= imm->value;
+            }
+          }
+          total_shared += buffer_size * sub.buffer->dtype.bytes();
+        }
+      }
+
+      // Calculate blocks limited by shared memory
+      int64_t blocks_per_sm_shared =
+          (total_shared > 0) ? (max_shared_memory_per_sm / total_shared) : max_blocks_per_sm;
+      blocks_per_sm_shared = std::min(blocks_per_sm_shared, max_blocks_per_sm);
+
+      // Calculate blocks limited by registers (heuristic: 32 regs per thread)
+      int64_t total_registers_per_block = thread_block_size * 32;
+      int64_t blocks_per_sm_reg = (total_registers_per_block > 0)
+                                      ? (max_registers_per_sm / total_registers_per_block)
+                                      : max_blocks_per_sm;
+      blocks_per_sm_reg = std::min(blocks_per_sm_reg, max_blocks_per_sm);
+
+      // Take minimum and calculate occupancy
+      int64_t blocks_per_sm =
+          std::min({blocks_per_sm_warps, blocks_per_sm_shared, blocks_per_sm_reg});
+      est_occupancy = static_cast<double>(num_warp * blocks_per_sm) / max_warps_per_sm;
+
+      // 4. WLP (Warp Level Parallelism)
+      double tb_warps = std::ceil(static_cast<double>(thread_block_size) / 32.0);
+      double sm_data_volume = std::max(1.0, static_cast<double>(total_shared));
+      double wlp_sm = (65536.0 / sm_data_volume) * tb_warps;
+      double wlp_reg = 65536.0 / ((static_cast<double>(total_registers_per_block) + 25.0) * 32.0);
+      wlp = std::min(wlp_sm, wlp_reg);
+    }
+
+    // 3. ILP (Instruction Level Parallelism)
+    ilp = 1.0;
+    for (const ForNode* loop : loop_nest.unroll) {
+      if (const int64_t* extent = GetLoopIntExtent(loop)) {
+        ilp *= static_cast<double>(*extent);
+      }
+    }
+    for (const ForNode* loop : loop_nest.vectorize) {
+      if (const int64_t* extent = GetLoopIntExtent(loop)) {
+        ilp *= static_cast<double>(*extent);
+      }
+    }
+
+    // 5. MLP (Memory Level Parallelism)
+    double total_buffer_size = 0.0;
+    for (const auto& sub : sub_features) {
+      if (sub.buffer) {
+        total_buffer_size += sub.unique_bytes;
+      }
+    }
+    mlp = total_buffer_size / 32.0;
+
+    // 6. Total Reuse (harmonic mean)
+    double sum_inv_reuse = 0.0;
+    for (const auto& sub : sub_features) {
+      if (sub.reuse_ct > 0) {
+        sum_inv_reuse += 1.0 / static_cast<double>(sub.reuse_ct);
+      } else {
+        sum_inv_reuse += 1.0;  // Default for no reuse
+      }
+    }
+    if (sum_inv_reuse > 0) {
+      total_reuse = 1.0 / sum_inv_reuse;
+    }
+
+    // 7. OI_Global (Operational Intensity - Global Memory)
+    double total_ops = static_cast<double>(arith_ops.float_mad + arith_ops.float_add_sub +
+                                           arith_ops.float_mul + arith_ops.int_mad +
+                                           arith_ops.int_add_sub + arith_ops.int_mul);
+    double global_bytes = 0.0;
+    for (const auto& sub : sub_features) {
+      ffi::String buffer_scope = sub.buffer ? ffi::GetRef<Buffer>(sub.buffer).scope() : "";
+      if (sub.buffer && (buffer_scope == "" || buffer_scope == "global")) {
+        global_bytes += sub.unique_bytes;
+      }
+    }
+    double global_trans = global_bytes / 32.0;
+    if (global_trans > 0) {
+      oi_global = total_ops / (32.0 * global_trans);
+    }
+
+    // 8. OI_Shared (Operational Intensity - Shared Memory)
+    double shared_bytes = 0.0;
+    for (const auto& sub : sub_features) {
+      if (sub.buffer && ffi::GetRef<Buffer>(sub.buffer).scope() == "shared") {
+        shared_bytes += sub.unique_bytes;
+      }
+    }
+    double shared_trans = shared_bytes / 32.0;
+    if (shared_trans > 0 && thread_block_size > 0) {
+      oi_shared = total_ops / (32.0 * shared_trans);
+    }
+  }
+};
+
+}  // namespace group7
+
 /*! \brief The feature extracted */
 struct Feature {
   const BufferNode* buffer = nullptr;
@@ -1261,6 +1455,7 @@ struct Feature {
   std::unique_ptr<group4::Feature> group4 = nullptr;
   std::unique_ptr<group5::Feature> group5 = nullptr;
   std::shared_ptr<group6::Feature> group6 = nullptr;
+  std::unique_ptr<group7::Feature> group7 = nullptr;
 
   bool operator<(const Feature& other) const { return buffer_order < other.buffer_order; }
 };
@@ -1325,6 +1520,9 @@ class PerStoreFeatureCollector : private StmtVisitor {
         std::make_unique<group3::Feature>(arith_intensity_curve_num_samples_, loop_nest_,
                                           for_touched_bytes_, feature.group1->arith_ops);
     feature.group5 = std::make_unique<group5::Feature>(loop_nest_);
+    feature.group7 = std::make_unique<group7::Feature>(loop_nest_, is_gpu_,
+                                                        feature.group1->arith_ops,
+                                                        feature.group2->sub_features);
   }
 
   void VisitStmt_(const BlockNode* block) final {
@@ -1396,6 +1594,9 @@ class PerStoreFeatureNode : public FeatureExtractorNode {
       feature.group3->Export(&result);
       feature.group4->Export(&result, feature.group5->outer_prod);
       feature.group5->Export(&result);
+      if (feature.group7) {
+        feature.group7->Export(&result);
+      }
     }
   }
 
@@ -1439,7 +1640,8 @@ FeatureExtractor FeatureExtractor::PerStoreFeature(int buffers_per_store,
                              tir::group2::Feature::SubFeature::kCount * buffers_per_store +  //
                              arith_intensity_curve_num_samples +                             //
                              tir::group4::Feature::kCount +                                  //
-                             tir::group5::Feature::kCount;
+                             tir::group5::Feature::kCount +                                  //
+                             tir::group7::Feature::kCount;  // GPU performance metrics
   if (extract_workload) {
     n->feature_vector_length += tir::group6::Feature::kCount;
   }

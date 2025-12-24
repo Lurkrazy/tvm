@@ -26,7 +26,7 @@ from tvm import meta_schedule as ms
 from tvm import te, tir
 from tvm.script import tir as T
 
-N_FEATURES = 164
+N_FEATURES = 172  # 164 original + 8 Group 7 GPU metrics
 
 
 @T.prim_func
@@ -187,7 +187,20 @@ def _feature_names(  # pylint: disable=invalid-name
             "auto_unroll_max_step",
         ]
     )
-    # 57 + 18 * 5 + 10 + 4 + 3
+    # Group 7: GPU performance metrics
+    result.extend(
+        [
+            "wave_efficiency",
+            "est_occupancy",
+            "ilp",
+            "wlp",
+            "mlp",
+            "total_reuse",
+            "oi_global",
+            "oi_shared",
+        ]
+    )
+    # 57 + 18 * 5 + 10 + 4 + 3 + 8 = 172
     assert len(result) == N_FEATURES
     return result
 
