@@ -39,6 +39,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "../../tir/transforms/ir_utils.h"
 #include "../utils.h"
 
 namespace tvm {
@@ -46,6 +47,57 @@ namespace tir {
 
 /*! \brief Given x, compute log2(|x| + 1) */
 inline double slog(double x) { return x >= 0 ? std::log2(x + 1) : std::log2(-x + 1); }
+
+/*!
+ * \brief WMMA-specific Group 7 GPU performance features
+ *
+ * These features capture Tensor Core workload characteristics:
+ * - Wave efficiency for WMMA block scheduling
+ * - Warp occupancy for concurrent WMMA execution
+ * - MMA operation parallelism (ILP equivalent)
+ * - Pipeline depth (software pipelining)
+ * - Concurrent memory loads
+ * - Tile-based data reuse
+ * - Operational intensity for global/shared memory
+ */
+namespace wmma_group7 {
+
+struct Feature {
+  /*! \brief Wave efficiency: blocks/SM efficiency */
+  double wmma_wave_efficiency = 0.0;
+  /*! \brief Warp occupancy for WMMA operations */
+  double wmma_warp_occupancy = 0.0;
+  /*! \brief Number of mma_sync operations (ILP for WMMA) */
+  double wmma_mma_count = 0.0;
+  /*! \brief K-loop unroll factor / pipeline depth */
+  double wmma_pipeline_depth = 0.0;
+  /*! \brief Concurrent memory loads (async copy parallelism) */
+  double wmma_concurrent_loads = 0.0;
+  /*! \brief Tile reuse factor: (reuse_A + reuse_B) / 2 */
+  double wmma_tile_reuse = 0.0;
+  /*! \brief Operational intensity for global memory */
+  double wmma_oi_global = 0.0;
+  /*! \brief Operational intensity for shared memory */
+  double wmma_oi_shared = 0.0;
+
+  static constexpr int64_t kCount = 8;
+
+  void Export(std::vector<double>* v) const {
+    double vs[] = {
+        slog(wmma_wave_efficiency),
+        slog(wmma_warp_occupancy),
+        slog(wmma_mma_count),
+        slog(wmma_pipeline_depth),
+        slog(wmma_concurrent_loads),
+        slog(wmma_tile_reuse),
+        slog(wmma_oi_global),
+        slog(wmma_oi_shared),
+    };
+    v->insert(v->end(), std::begin(vs), std::end(vs));
+  }
+};
+
+}  // namespace wmma_group7
 
 namespace tensorcore {
 
@@ -182,16 +234,137 @@ struct TCBehavior {
 };
 
 /*!
+ * \brief GPU loop binding information for WMMA workloads
+ */
+struct WMMALoopNest {
+  int64_t blockIdx_x = 1;
+  int64_t blockIdx_y = 1;
+  int64_t blockIdx_z = 1;
+  int64_t threadIdx_x = 1;
+  int64_t threadIdx_y = 1;
+  int64_t threadIdx_z = 1;
+  int64_t vthread = 1;
+
+  int64_t GridSize() const { return blockIdx_x * blockIdx_y * blockIdx_z; }
+  int64_t BlockSize() const { return threadIdx_x * threadIdx_y * threadIdx_z; }
+  int64_t NumWarps() const { return (BlockSize() + 31) / 32; }
+};
+
+/*!
+ * \brief WMMA operation statistics for Group 7 features
+ */
+struct WMMAStats {
+  int64_t mma_sync_count = 0;      // Number of mma_sync calls
+  int64_t load_a_count = 0;        // Number of load_matrix_sync for A
+  int64_t load_b_count = 0;        // Number of load_matrix_sync for B
+  int64_t store_count = 0;         // Number of store_matrix_sync
+  int64_t fill_count = 0;          // Number of fill_fragment
+
+  // Matrix dimensions (default 16x16x16)
+  int wmma_m = 16;
+  int wmma_n = 16;
+  int wmma_k = 16;
+
+  // Tile dimensions inferred from loops
+  int64_t tile_m = 1;
+  int64_t tile_n = 1;
+  int64_t tile_k = 1;
+
+  // K-loop info for pipeline depth
+  int64_t k_loop_extent = 1;
+  int64_t k_unroll_factor = 1;
+
+  // Memory info
+  int64_t shared_bytes = 0;
+  int64_t global_bytes = 0;
+
+  double ComputeFLOPS() const {
+    // Each mma_sync: 2 * M * N * K FLOPs
+    return 2.0 * wmma_m * wmma_n * wmma_k * mma_sync_count;
+  }
+};
+
+/*!
  * \brief Represents a Tensor Core program as a sequence of behaviors
  */
 struct TCProgram {
   std::vector<TCBehavior> behaviors;
   bool has_tensor_core = false;
 
+  // WMMA Group 7 related data
+  WMMALoopNest loop_nest;
+  WMMAStats wmma_stats;
+  std::unique_ptr<wmma_group7::Feature> group7;
+
+  void ComputeGroup7Features(int64_t num_sm = 108) {
+    if (!has_tensor_core) {
+      return;
+    }
+
+    group7 = std::make_unique<wmma_group7::Feature>();
+
+    // 1. Wave efficiency
+    int64_t grid_size = loop_nest.GridSize();
+    if (grid_size > 0 && num_sm > 0) {
+      double waves = static_cast<double>(grid_size) / num_sm;
+      group7->wmma_wave_efficiency = waves / std::ceil(waves);
+    }
+
+    // 2. Warp occupancy
+    int64_t warps_per_block = loop_nest.NumWarps();
+    int64_t max_warps_per_sm = 64;  // A100: 64 warps per SM
+    int64_t blocks_per_sm = std::min(int64_t(32), max_warps_per_sm / std::max(warps_per_block, int64_t(1)));
+    group7->wmma_warp_occupancy = static_cast<double>(warps_per_block * blocks_per_sm) / max_warps_per_sm;
+
+    // 3. MMA count (ILP for WMMA)
+    group7->wmma_mma_count = static_cast<double>(wmma_stats.mma_sync_count);
+
+    // 4. Pipeline depth (k-loop unrolling)
+    group7->wmma_pipeline_depth = static_cast<double>(wmma_stats.k_unroll_factor);
+
+    // 5. Concurrent loads
+    group7->wmma_concurrent_loads = static_cast<double>(wmma_stats.load_a_count + wmma_stats.load_b_count);
+
+    // 6. Tile reuse
+    // Reuse is estimated from the ratio of MMA operations to loads
+    // reuse_A = mma_sync_count / load_a_count (how many times each A fragment is reused)
+    // reuse_B = mma_sync_count / load_b_count (how many times each B fragment is reused)
+    double reuse_a = 1.0, reuse_b = 1.0;
+    if (wmma_stats.load_a_count > 0) {
+      reuse_a = static_cast<double>(wmma_stats.mma_sync_count) / wmma_stats.load_a_count;
+    }
+    if (wmma_stats.load_b_count > 0) {
+      reuse_b = static_cast<double>(wmma_stats.mma_sync_count) / wmma_stats.load_b_count;
+    }
+    // Use harmonic mean for tile reuse (similar to total_reuse in PerStoreFeature)
+    if (reuse_a > 0 && reuse_b > 0) {
+      group7->wmma_tile_reuse = 2.0 / (1.0 / reuse_a + 1.0 / reuse_b);
+    } else {
+      group7->wmma_tile_reuse = (reuse_a + reuse_b) / 2.0;
+    }
+
+    // 7. OI Global
+    double flops = wmma_stats.ComputeFLOPS();
+    if (wmma_stats.global_bytes > 0) {
+      group7->wmma_oi_global = flops / wmma_stats.global_bytes;
+    }
+
+    // 8. OI Shared
+    if (wmma_stats.shared_bytes > 0) {
+      group7->wmma_oi_shared = flops / wmma_stats.shared_bytes;
+    }
+  }
+
   void Export(std::vector<std::vector<double>>* output) const {
     for (const auto& behavior : behaviors) {
       std::vector<double> feature_vec;
       behavior.Export(&feature_vec);
+
+      // Append Group 7 features if available
+      if (group7) {
+        group7->Export(&feature_vec);
+      }
+
       output->push_back(feature_vec);
     }
   }
@@ -233,26 +406,86 @@ class TCFeatureCollector : private StmtExprVisitor {
         collector.VisitStmt(prim_func->body);
       }
     }
-    return collector.program_;
+    // Compute Group 7 features after collection
+    collector.program_.ComputeGroup7Features();
+    return std::move(collector.program_);
   }
 
  private:
-  // Track loop nesting
+  // Track loop nesting and GPU bindings
   void VisitStmt_(const ForNode* loop) final {
     int64_t extent = 1;
     if (const auto* int_imm = loop->extent.as<IntImmNode>()) {
       extent = int_imm->value;
     }
 
+    // Track GPU thread bindings
+    std::string thread_tag;
+    if (loop->kind == ForKind::kThreadBinding) {
+      if (const auto* str_imm = loop->thread_binding.value().as<StringImmNode>()) {
+        thread_tag = str_imm->value;
+      }
+    }
+
+    if (thread_tag == "blockIdx.x") {
+      program_.loop_nest.blockIdx_x = extent;
+    } else if (thread_tag == "blockIdx.y") {
+      program_.loop_nest.blockIdx_y = extent;
+    } else if (thread_tag == "blockIdx.z") {
+      program_.loop_nest.blockIdx_z = extent;
+    } else if (thread_tag == "threadIdx.x") {
+      program_.loop_nest.threadIdx_x = extent;
+    } else if (thread_tag == "threadIdx.y") {
+      program_.loop_nest.threadIdx_y = extent;
+    } else if (thread_tag == "threadIdx.z") {
+      program_.loop_nest.threadIdx_z = extent;
+    } else if (thread_tag == "vthread.x" || thread_tag == "vthread.y" ||
+               thread_tag == "vthread.z" || thread_tag == "vthread") {
+      program_.loop_nest.vthread *= extent;
+    }
+
+    // Track k-loop for pipeline depth estimation
+    // K-loops are typically the innermost reduction loops
+    bool is_reduction_loop = (loop->kind == ForKind::kSerial && in_wmma_region_);
+
     loop_depth_++;
     loop_extent_product_ *= extent;
     loop_extents_.push_back(extent);
 
+    // Track potential k-loop
+    if (is_reduction_loop && extent > 1) {
+      k_loop_candidates_.push_back(extent);
+    }
+
     StmtExprVisitor::VisitStmt_(loop);
+
+    if (is_reduction_loop && extent > 1) {
+      k_loop_candidates_.pop_back();
+    }
 
     loop_extents_.pop_back();
     loop_extent_product_ /= extent;
     loop_depth_--;
+  }
+
+  // Track allocations for memory info
+  void VisitStmt_(const AllocateNode* alloc) final {
+    int64_t bytes = 1;
+    for (const auto& dim : alloc->extents) {
+      if (const auto* imm = dim.as<IntImmNode>()) {
+        bytes *= imm->value;
+      }
+    }
+    bytes *= alloc->dtype.bytes();
+
+    ffi::String scope = GetPtrStorageScope(alloc->buffer_var);
+    if (scope == "shared" || scope == "shared.dyn") {
+      program_.wmma_stats.shared_bytes += bytes;
+    } else if (scope == "" || scope == "global") {
+      program_.wmma_stats.global_bytes += bytes;
+    }
+
+    StmtExprVisitor::VisitStmt_(alloc);
   }
 
   // Handle regular BufferStore operations
@@ -353,6 +586,10 @@ class TCFeatureCollector : private StmtExprVisitor {
       if (const auto* k_imm = call->args[3].as<IntImmNode>()) k = k_imm->value;
     }
 
+    // Update WMMA stats
+    program_.wmma_stats.fill_count++;
+    in_wmma_region_ = true;
+
     std::string intrin_name =
         "wmma_fill_" + std::to_string(m) + "x" + std::to_string(n) + "x" + std::to_string(k) +
         "_f16";
@@ -372,8 +609,17 @@ class TCFeatureCollector : private StmtExprVisitor {
     }
 
     // Determine matrix type (A or B) based on load count
-    std::string matrix = (load_count_ % 2 == 0) ? "a" : "b";
+    bool is_matrix_a = (load_count_ % 2 == 0);
+    std::string matrix = is_matrix_a ? "a" : "b";
     load_count_++;
+
+    // Update WMMA stats
+    if (is_matrix_a) {
+      program_.wmma_stats.load_a_count++;
+    } else {
+      program_.wmma_stats.load_b_count++;
+    }
+    in_wmma_region_ = true;
 
     std::string intrin_name = "wmma_load_" + std::to_string(m) + "x" + std::to_string(n) + "x" +
                               std::to_string(k) + "_f16_" + matrix + "_shared_dyn";
@@ -388,6 +634,18 @@ class TCFeatureCollector : private StmtExprVisitor {
     int m = 16, n = 16, k = 16;
     // MMA sync typically has shape info later in args
     // For MVP, use default 16x16x16
+
+    // Update WMMA stats
+    program_.wmma_stats.mma_sync_count++;
+    program_.wmma_stats.wmma_m = m;
+    program_.wmma_stats.wmma_n = n;
+    program_.wmma_stats.wmma_k = k;
+    in_wmma_region_ = true;
+
+    // Estimate k-loop unroll factor from current k-loop candidates
+    if (!k_loop_candidates_.empty()) {
+      program_.wmma_stats.k_unroll_factor = k_loop_candidates_.back();
+    }
 
     std::string intrin_name = "wmma_sync_" + std::to_string(m) + "x" + std::to_string(n) + "x" +
                               std::to_string(k) + "_f16f16f16";
@@ -406,6 +664,9 @@ class TCFeatureCollector : private StmtExprVisitor {
       if (const auto* k_imm = call->args[3].as<IntImmNode>()) k = k_imm->value;
     }
 
+    // Update WMMA stats
+    program_.wmma_stats.store_count++;
+
     std::string intrin_name = "wmma_store_" + std::to_string(m) + "x" + std::to_string(n) + "x" +
                               std::to_string(k) + "_f16_shared_dyn";
 
@@ -420,6 +681,10 @@ class TCFeatureCollector : private StmtExprVisitor {
   int loop_depth_ = 0;
   int64_t loop_extent_product_ = 1;
   std::vector<int64_t> loop_extents_;
+
+  // WMMA region tracking
+  bool in_wmma_region_ = false;
+  std::vector<int64_t> k_loop_candidates_;
 };
 
 /*!
