@@ -36,7 +36,9 @@ from ..utils import _get_default_str
 class FeatureExtractor(Object):
     """Extractor for features from measure candidates for use in cost model."""
 
-    FeatureExtractorType = Union[Literal["per-store-feature"], "FeatureExtractor"]
+    FeatureExtractorType = Union[
+        Literal["per-store-feature", "per-block-feature"], "FeatureExtractor"
+    ]
 
     def extract_from(
         self, context: TuneContext, candidates: List[MeasureCandidate]
@@ -62,16 +64,44 @@ class FeatureExtractor(Object):
 
     @staticmethod
     def create(
-        kind: Literal["per-store-feature"],
+        kind: Literal["per-store-feature", "per-block-feature"],
         *args,
         **kwargs,
     ) -> "FeatureExtractor":
-        """Create a CostModel."""
+        """Create a FeatureExtractor.
+
+        Parameters
+        ----------
+        kind : str
+            The type of feature extractor to create.
+            - "per-store-feature": For CUDA Core workloads (default)
+            - "per-block-feature": For Tensor Core (WMMA) workloads
+        *args, **kwargs
+            Additional arguments passed to the feature extractor constructor.
+
+        Returns
+        -------
+        FeatureExtractor
+            The created feature extractor.
+
+        Examples
+        --------
+        .. code-block:: python
+
+            # For CUDA Core tuning
+            feature_extractor = FeatureExtractor.create("per-store-feature")
+
+            # For Tensor Core tuning
+            feature_extractor = FeatureExtractor.create("per-block-feature")
+        """
+        from . import PerBlockFeature  # pylint: disable=import-outside-toplevel
         from . import PerStoreFeature  # pylint: disable=import-outside-toplevel
 
         if kind == "per-store-feature":
             return PerStoreFeature(*args, **kwargs)  # type: ignore
-        raise ValueError(f"Unknown CostModel: {kind}")
+        if kind == "per-block-feature":
+            return PerBlockFeature(*args, **kwargs)  # type: ignore
+        raise ValueError(f"Unknown FeatureExtractor kind: {kind}")
 
 
 @register_object("meta_schedule.PyFeatureExtractor")
