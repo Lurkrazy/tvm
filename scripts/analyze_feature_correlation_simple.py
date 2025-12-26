@@ -3,6 +3,8 @@ Analyze correlation between GPU features and schedule quality.
 
 This script generates schedules with different tile sizes and analyzes
 the correlation between features and expected performance characteristics.
+
+Supports multiple matmul sizes and detects GPU SM count automatically.
 """
 
 import numpy as np
@@ -13,24 +15,36 @@ from tvm.script import tir as T
 from scipy import stats
 import itertools
 
-@T.prim_func
-def matmul(
-    A: T.Buffer((1024, 1024), "float32"),
-    B: T.Buffer((1024, 1024), "float32"),
-    C: T.Buffer((1024, 1024), "float32"),
-):
-    for i, j, k in T.grid(1024, 1024, 1024):
-        with T.block("C"):
-            vi, vj, vk = T.axis.remap("SSR", [i, j, k])
-            with T.init():
-                C[vi, vj] = 0.0
-            C[vi, vj] = C[vi, vj] + A[vi, vk] * B[vk, vj]
+
+# RTX 2080 Ti: 68 SMs, 64 CUDA cores per SM = 4352 CUDA cores
+# A100: 108 SMs
+GPU_SM_COUNT = {
+    "nvidia/geforce-rtx-2080-ti": 68,
+    "nvidia/nvidia-a100": 108,
+    "cuda": 68,  # default to RTX 2080 Ti
+}
 
 
-def create_gpu_schedule(tile_i, tile_j, tile_k, thread_i, thread_j):
+def get_matmul_func(M, N, K):
+    """Generate matmul function with specified dimensions."""
+    @T.prim_func
+    def matmul_mnk(
+        A: T.Buffer((M, K), "float32"),
+        B: T.Buffer((K, N), "float32"),
+        C: T.Buffer((M, N), "float32"),
+    ):
+        for i, j, k in T.grid(M, N, K):
+            with T.block("C"):
+                vi, vj, vk = T.axis.remap("SSR", [i, j, k])
+                with T.init():
+                    C[vi, vj] = 0.0
+                C[vi, vj] = C[vi, vj] + A[vi, vk] * B[vk, vj]
+    return matmul_mnk
+
+
+def create_gpu_schedule(matmul_func, tile_i, tile_j, tile_k, thread_i, thread_j):
     """Create a GPU schedule with specified tile sizes."""
-    func = matmul
-    sch = tir.Schedule(func, debug_mask="all")
+    sch = tir.Schedule(matmul_func, debug_mask="all")
 
     try:
         c = sch.get_block("C")
@@ -69,7 +83,7 @@ def create_gpu_schedule(tile_i, tile_j, tile_k, thread_i, thread_j):
         return None
 
 
-def estimate_performance(tile_i, tile_j, tile_k, thread_i, thread_j):
+def estimate_performance(M, N, K, tile_i, tile_j, tile_k, thread_i, thread_j, num_sm):
     """Estimate relative performance score based on tile sizes.
 
     Better schedules typically have:
@@ -77,14 +91,11 @@ def estimate_performance(tile_i, tile_j, tile_k, thread_i, thread_j):
     - Balanced thread dimensions (better occupancy)
     - tile_k that allows good shared memory usage
     """
-    M, N, K = 1024, 1024, 1024
-
     # Compute various performance proxies
     num_blocks = (M // tile_i) * (N // tile_j)
     threads_per_block = (tile_i // thread_i) * (tile_j // thread_j)
 
     # Wave efficiency (prefer full waves)
-    num_sm = 108  # A100
     waves = num_blocks / num_sm
     wave_eff = waves / np.ceil(waves) if waves > 0 else 0
 
@@ -106,20 +117,67 @@ def estimate_performance(tile_i, tile_j, tile_k, thread_i, thread_j):
     return score
 
 
-def main():
-    target = tvm.target.Target("nvidia/nvidia-a100")
-    mod = tvm.IRModule({"main": matmul})
+def analyze_matmul_size(M, N, K, target, num_sm, extractor, tile_options):
+    """Analyze correlations for a specific matmul size."""
+    matmul_func = get_matmul_func(M, N, K)
+    mod = tvm.IRModule({"main": matmul_func})
 
     ctx = ms.TuneContext(
         mod=mod,
         target=target,
         space_generator=ms.space_generator.PostOrderApply(),
-        task_name="matmul",
+        task_name=f"matmul_{M}x{N}x{K}",
     )
+
+    all_features = []
+    all_scores = []
+    all_configs = []
+
+    for config in tile_options:
+        tile_i, tile_j, tile_k, thread_i, thread_j = config
+
+        # Skip configs that don't divide evenly
+        if M % tile_i != 0 or N % tile_j != 0 or K % tile_k != 0:
+            continue
+        if tile_i % thread_i != 0 or tile_j % thread_j != 0:
+            continue
+
+        sch = create_gpu_schedule(matmul_func, tile_i, tile_j, tile_k, thread_i, thread_j)
+        if sch is None:
+            continue
+
+        try:
+            # Extract features
+            features_list = extractor.extract_from(ctx, [ms.MeasureCandidate(sch, None)])
+            features = features_list[0].numpy()
+
+            # Average across stores
+            avg_features = np.mean(features, axis=0)
+
+            # Estimate performance score
+            score = estimate_performance(M, N, K, tile_i, tile_j, tile_k, thread_i, thread_j, num_sm)
+
+            all_features.append(avg_features)
+            all_scores.append(score)
+            all_configs.append(config)
+        except Exception as e:
+            continue
+
+    return all_features, all_scores, all_configs
+
+
+def main():
+    # Use RTX 2080 Ti
+    target_name = "nvidia/geforce-rtx-2080-ti"
+    target = tvm.target.Target(target_name)
+    num_sm = GPU_SM_COUNT.get(target_name, 68)
+
+    print(f"Target: {target_name}")
+    print(f"SM Count: {num_sm}")
 
     extractor = ms.feature_extractor.PerStoreFeature()
 
-    # Generate schedules with different configurations
+    # Tile configurations to test
     tile_options = [
         # (tile_i, tile_j, tile_k, thread_i, thread_j)
         (32, 32, 8, 4, 4),
@@ -142,39 +200,46 @@ def main():
         (64, 64, 4, 8, 8),
         (32, 128, 16, 4, 16),
         (128, 32, 16, 16, 4),
+        # Additional configs
+        (256, 256, 8, 16, 16),
+        (256, 256, 16, 16, 16),
+        (512, 512, 8, 32, 16),
+        (64, 64, 64, 8, 8),
+        (32, 32, 64, 4, 4),
+    ]
+
+    # Test multiple matmul sizes
+    matmul_sizes = [
+        (256, 256, 256),
+        (512, 512, 512),
+        (1024, 1024, 1024),
+        (2048, 2048, 2048),
+        (4096, 4096, 4096),
     ]
 
     all_features = []
     all_scores = []
 
+    print("\n" + "=" * 80)
     print("Generating schedules and extracting features...")
-    for config in tile_options:
-        tile_i, tile_j, tile_k, thread_i, thread_j = config
+    print("=" * 80)
 
-        sch = create_gpu_schedule(tile_i, tile_j, tile_k, thread_i, thread_j)
-        if sch is None:
-            continue
+    for M, N, K in matmul_sizes:
+        print(f"\n--- Matmul {M}x{N}x{K} ---")
+        features, scores, configs = analyze_matmul_size(
+            M, N, K, target, num_sm, extractor, tile_options
+        )
+        print(f"  Valid schedules: {len(features)}")
 
-        try:
-            # Extract features
-            features_list = extractor.extract_from(ctx, [ms.MeasureCandidate(sch, None)])
-            features = features_list[0].numpy()
+        all_features.extend(features)
+        all_scores.extend(scores)
 
-            # Average across stores
-            avg_features = np.mean(features, axis=0)
+        for config, score in zip(configs[:5], scores[:5]):  # Print first 5
+            print(f"    Config {config}: score={score:.4f}")
+        if len(configs) > 5:
+            print(f"    ... and {len(configs) - 5} more")
 
-            # Estimate performance score
-            score = estimate_performance(tile_i, tile_j, tile_k, thread_i, thread_j)
-
-            all_features.append(avg_features)
-            all_scores.append(score)
-
-            print(f"  Config {config}: score={score:.4f}")
-        except Exception as e:
-            print(f"  Config {config}: failed - {e}")
-            continue
-
-    print(f"\nTotal valid schedules: {len(all_features)}")
+    print(f"\nTotal valid schedules across all sizes: {len(all_features)}")
 
     if len(all_features) < 5:
         print("Not enough samples for analysis")
