@@ -30,6 +30,7 @@
  */
 
 #include <tvm/ffi/reflection/registry.h>
+#include <tvm/target/target.h>
 #include <tvm/tir/builtin.h>
 #include <tvm/tir/transform.h>
 
@@ -47,6 +48,94 @@ namespace tir {
 
 /*! \brief Given x, compute log2(|x| + 1) */
 inline double slog(double x) { return x >= 0 ? std::log2(x + 1) : std::log2(-x + 1); }
+
+// ==================== GPU Architecture Constants ====================
+// These constants define GPU hardware characteristics.
+// TODO(future): Consider making these configurable per-target.
+
+/*! \brief Number of threads per warp (NVIDIA GPUs) */
+constexpr int64_t kWarpSize = 32;
+
+/*! \brief Default feature vector dimension for WMMA intrinsics */
+constexpr int64_t kWMMAIntrinFeatureDim = 60;
+
+/*! \brief Maximum number of nested loops to track */
+constexpr size_t kMaxTrackedLoops = 8;
+
+/*! \brief Number of behavior types in TCBehavior enum */
+constexpr int64_t kNumBehaviorTypes = 5;
+
+// ==================== GPU Architecture Limits ====================
+// These are architecture-specific limits that vary by GPU generation.
+
+/*! \brief GPU architecture parameters */
+struct GPUArchParams {
+  int64_t num_sm = 108;           // Number of SMs (A100: 108, V100: 80, RTX 3090: 82)
+  int64_t max_warps_per_sm = 64;  // Max warps per SM (A100: 64, V100: 64)
+  int64_t max_blocks_per_sm = 32; // Max blocks per SM
+  int64_t max_threads_per_block = 1024;  // Max threads per block
+
+  /*! \brief Get default parameters for common GPUs */
+  static GPUArchParams GetDefault() { return GPUArchParams(); }
+
+  /*! \brief Get parameters for specific GPU targets */
+  static GPUArchParams FromTarget(const std::string& target_name) {
+    GPUArchParams params;
+
+    // ==================== Blackwell (SM 100) ====================
+    // NVIDIA RTX 5090 (Blackwell, 2025)
+    if (target_name.find("5090") != std::string::npos) {
+      params.num_sm = 170;
+      params.max_warps_per_sm = 48;
+    }
+
+    // ==================== Ada Lovelace (SM 89) ====================
+    // NVIDIA RTX 4090
+    else if (target_name.find("4090") != std::string::npos) {
+      params.num_sm = 128;
+      params.max_warps_per_sm = 48;
+    }
+
+    // ==================== Ampere (SM 80/86) ====================
+    // NVIDIA A100 (SM 80)
+    else if (target_name.find("a100") != std::string::npos) {
+      params.num_sm = 108;
+      params.max_warps_per_sm = 64;
+    }
+    // NVIDIA RTX 3090 (SM 86)
+    else if (target_name.find("3090") != std::string::npos) {
+      params.num_sm = 82;
+      params.max_warps_per_sm = 48;
+    }
+    // NVIDIA RTX 3080 Ti (SM 86)
+    else if (target_name.find("3080") != std::string::npos) {
+      params.num_sm = 80;
+      params.max_warps_per_sm = 48;
+    }
+    // NVIDIA RTX 3050 (SM 86)
+    else if (target_name.find("3050") != std::string::npos) {
+      params.num_sm = 20;
+      params.max_warps_per_sm = 48;
+    }
+
+    // ==================== Volta (SM 70) ====================
+    // NVIDIA V100
+    else if (target_name.find("v100") != std::string::npos) {
+      params.num_sm = 80;
+      params.max_warps_per_sm = 64;
+    }
+
+    // ==================== Turing (SM 75) ====================
+    // NVIDIA RTX 2080 Ti
+    else if (target_name.find("2080") != std::string::npos) {
+      params.num_sm = 68;
+      params.max_warps_per_sm = 32;
+    }
+
+    // Default: A100-like parameters for unknown targets
+    return params;
+  }
+};
 
 /*!
  * \brief WMMA-specific Group 7 GPU performance features
@@ -116,7 +205,7 @@ class WMMAIntrinFeatures {
       return it->second;
     }
     // Return empty feature for unknown intrinsic
-    return std::vector<double>(60, 0.0);
+    return std::vector<double>(kWMMAIntrinFeatureDim, 0.0);
   }
 
   bool HasFeature(const std::string& key) const {
@@ -214,8 +303,8 @@ struct TCBehavior {
   std::vector<double> features;
 
   void Export(std::vector<double>* output) const {
-    // One-hot encoding for behavior type (5 dims)
-    std::vector<double> one_hot(5, 0.0);
+    // One-hot encoding for behavior type
+    std::vector<double> one_hot(kNumBehaviorTypes, 0.0);
     one_hot[static_cast<int>(type)] = 1.0;
     output->insert(output->end(), one_hot.begin(), one_hot.end());
 
@@ -247,7 +336,7 @@ struct WMMALoopNest {
 
   int64_t GridSize() const { return blockIdx_x * blockIdx_y * blockIdx_z; }
   int64_t BlockSize() const { return threadIdx_x * threadIdx_y * threadIdx_z; }
-  int64_t NumWarps() const { return (BlockSize() + 31) / 32; }
+  int64_t NumWarps() const { return (BlockSize() + kWarpSize - 1) / kWarpSize; }
 };
 
 /*!
@@ -296,7 +385,7 @@ struct TCProgram {
   WMMAStats wmma_stats;
   std::unique_ptr<wmma_group7::Feature> group7;
 
-  void ComputeGroup7Features(int64_t num_sm = 108) {
+  void ComputeGroup7Features(const GPUArchParams& arch = GPUArchParams::GetDefault()) {
     if (!has_tensor_core) {
       return;
     }
@@ -305,16 +394,17 @@ struct TCProgram {
 
     // 1. Wave efficiency
     int64_t grid_size = loop_nest.GridSize();
-    if (grid_size > 0 && num_sm > 0) {
-      double waves = static_cast<double>(grid_size) / num_sm;
+    if (grid_size > 0 && arch.num_sm > 0) {
+      double waves = static_cast<double>(grid_size) / arch.num_sm;
       group7->wmma_wave_efficiency = waves / std::ceil(waves);
     }
 
     // 2. Warp occupancy
     int64_t warps_per_block = loop_nest.NumWarps();
-    int64_t max_warps_per_sm = 64;  // A100: 64 warps per SM
-    int64_t blocks_per_sm = std::min(int64_t(32), max_warps_per_sm / std::max(warps_per_block, int64_t(1)));
-    group7->wmma_warp_occupancy = static_cast<double>(warps_per_block * blocks_per_sm) / max_warps_per_sm;
+    int64_t blocks_per_sm = std::min(arch.max_blocks_per_sm,
+                                     arch.max_warps_per_sm / std::max(warps_per_block, int64_t(1)));
+    group7->wmma_warp_occupancy =
+        static_cast<double>(warps_per_block * blocks_per_sm) / arch.max_warps_per_sm;
 
     // 3. MMA count (ILP for WMMA)
     group7->wmma_mma_count = static_cast<double>(wmma_stats.mma_sync_count);
@@ -399,15 +489,27 @@ struct LoopInfo {
  */
 class TCFeatureCollector : private StmtExprVisitor {
  public:
-  static TCProgram Collect(const IRModule& mod) {
+  /*!
+   * \brief Collect features from an IRModule
+   * \param mod The IRModule to analyze
+   * \param target Optional target for GPU architecture parameters
+   * \return The collected TCProgram with features
+   */
+  static TCProgram Collect(const IRModule& mod, const ffi::Optional<Target>& target = std::nullopt) {
     TCFeatureCollector collector;
     for (const auto& kv : mod->functions) {
       if (const auto* prim_func = kv.second.as<PrimFuncNode>()) {
         collector.VisitStmt(prim_func->body);
       }
     }
+    // Get GPU architecture parameters from target
+    GPUArchParams arch = GPUArchParams::GetDefault();
+    if (target.defined()) {
+      std::string target_str = target.value()->str();
+      arch = GPUArchParams::FromTarget(target_str);
+    }
     // Compute Group 7 features after collection
-    collector.program_.ComputeGroup7Features();
+    collector.program_.ComputeGroup7Features(arch);
     return std::move(collector.program_);
   }
 
@@ -526,15 +628,15 @@ class TCFeatureCollector : private StmtExprVisitor {
     }
     behavior.data_flow = {1, dest};  // global -> dest
 
-    // Extract loop-based features (60 dims to match WMMA intrinsic features)
-    std::vector<double> features(60, 0.0);
+    // Extract loop-based features (same dimension as WMMA intrinsic features)
+    std::vector<double> features(kWMMAIntrinFeatureDim, 0.0);
 
     // Basic loop features
     features[0] = static_cast<double>(loop_depth_);
     features[1] = slog(static_cast<double>(loop_extent_product_));
 
-    // Per-loop extents (up to 8 loops)
-    for (size_t i = 0; i < std::min(loop_extents_.size(), size_t(8)); ++i) {
+    // Per-loop extents (up to kMaxTrackedLoops loops)
+    for (size_t i = 0; i < std::min(loop_extents_.size(), kMaxTrackedLoops); ++i) {
       features[2 + i] = slog(static_cast<double>(loop_extents_[i]));
     }
 
@@ -553,8 +655,10 @@ class TCFeatureCollector : private StmtExprVisitor {
     features[30] = slog(static_cast<double>(num_loads));
     features[31] = slog(static_cast<double>(store->buffer->shape.size()));
 
-    // Total touched bytes estimate
-    int64_t bytes = loop_extent_product_ * 4;  // assume float32
+    // Total touched bytes estimate (use buffer dtype if available, default to float32)
+    int64_t bytes_per_elem = store->buffer->dtype.bytes();
+    if (bytes_per_elem == 0) bytes_per_elem = 4;  // fallback to float32
+    int64_t bytes = loop_extent_product_ * bytes_per_elem;
     features[40] = slog(static_cast<double>(bytes));
 
     behavior.features = features;
@@ -742,9 +846,10 @@ class PerBlockFeatureNode : public FeatureExtractorNode {
         .def_ro("extract_workload", &PerBlockFeatureNode::extract_workload);
   }
 
-  void ExtractSingle(IRModule mod, std::vector<std::vector<double>>* results) {
-    // Collect Tensor Core features
-    tir::tensorcore::TCProgram program = tir::tensorcore::TCFeatureCollector::Collect(mod);
+  void ExtractSingle(IRModule mod, const ffi::Optional<Target>& target,
+                     std::vector<std::vector<double>>* results) {
+    // Collect Tensor Core features with target-specific GPU parameters
+    tir::tensorcore::TCProgram program = tir::tensorcore::TCFeatureCollector::Collect(mod, target);
 
     // Export features
     program.Export(results);
@@ -761,10 +866,13 @@ class PerBlockFeatureNode : public FeatureExtractorNode {
     std::vector<runtime::Tensor> results;
     results.resize(candidates.size());
 
-    auto f = [this, &candidates, &results](int, int task_id) -> void {
+    // Get target from tune_context for GPU architecture parameters
+    ffi::Optional<Target> target = tune_context->target;
+
+    auto f = [this, &candidates, &results, &target](int, int task_id) -> void {
       const auto& candidate = candidates[task_id];
       std::vector<std::vector<double>> features;
-      ExtractSingle(DeepCopyIRModule(candidate->sch->mod()), &features);
+      ExtractSingle(DeepCopyIRModule(candidate->sch->mod()), target, &features);
       results[task_id] = tir::tensorcore::AsTensor(features, this->feature_vector_length);
     };
 
