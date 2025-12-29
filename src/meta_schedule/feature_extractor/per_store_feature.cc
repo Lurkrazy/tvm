@@ -1379,15 +1379,46 @@ struct Feature {
     }
 
     // 3. ILP (Instruction Level Parallelism)
+    // Ansor definition: ILP = product of register tile sizes (innermost serial loops after thread
+    // binding) For GPU schedules, register-level loops are serial loops that come after
+    // thread-bound loops
     ilp = 1.0;
-    for (const ForNode* loop : loop_nest.unroll) {
-      if (const int64_t* extent = GetLoopIntExtent(loop)) {
-        ilp *= static_cast<double>(*extent);
+    {
+      // Find the index of the last thread-bound loop
+      int last_thread_idx = -1;
+      for (int i = 0; i < static_cast<int>(loop_nest.loops.size()); ++i) {
+        const ForNode* loop = loop_nest.loops[i];
+        if (loop->kind == ForKind::kThreadBinding) {
+          std::string thread_tag = loop->thread_binding.value()->thread_tag;
+          if (support::StartsWith(thread_tag, "threadIdx")) {
+            last_thread_idx = i;
+          }
+        }
       }
-    }
-    for (const ForNode* loop : loop_nest.vectorize) {
-      if (const int64_t* extent = GetLoopIntExtent(loop)) {
-        ilp *= static_cast<double>(*extent);
+
+      // Compute ILP as product of serial loop extents after the last thread-bound loop
+      if (last_thread_idx >= 0) {
+        for (int i = last_thread_idx + 1; i < static_cast<int>(loop_nest.loops.size()); ++i) {
+          const ForNode* loop = loop_nest.loops[i];
+          // Only count serial loops (register-level loops)
+          if (loop->kind == ForKind::kSerial) {
+            if (const int64_t* extent = GetLoopIntExtent(loop)) {
+              ilp *= static_cast<double>(*extent);
+            }
+          }
+        }
+      }
+
+      // Also include explicitly unrolled/vectorized loops (fallback for non-GPU or other cases)
+      for (const ForNode* loop : loop_nest.unroll) {
+        if (const int64_t* extent = GetLoopIntExtent(loop)) {
+          ilp *= static_cast<double>(*extent);
+        }
+      }
+      for (const ForNode* loop : loop_nest.vectorize) {
+        if (const int64_t* extent = GetLoopIntExtent(loop)) {
+          ilp *= static_cast<double>(*extent);
+        }
       }
     }
 
