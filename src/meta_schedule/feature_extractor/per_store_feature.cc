@@ -1478,6 +1478,130 @@ struct Feature {
 
 }  // namespace group7
 
+namespace group8 {
+
+/*!
+ * \brief Group 8 feature - MWP/CWP Model (Hong & Kim ISCA 2009)
+ *
+ * Memory Warp Parallelism (MWP) and Compute Warp Parallelism (CWP) model
+ * the number of warps needed to hide memory and compute latencies.
+ *
+ * MWP = min(active_warps, mem_latency / mem_issue_interval)
+ * CWP = comp_cycles / issue_cycles
+ */
+struct Feature {
+  /*! \brief Memory Warp Parallelism: warps to hide memory latency */
+  double mwp = 0.0;
+  /*! \brief Compute Warp Parallelism: warps to hide compute latency */
+  double cwp = 0.0;
+  /*! \brief Bank conflict ratio estimate */
+  double bank_conflict_ratio = 0.0;
+  /*! \brief Global memory coalescing efficiency */
+  double coalescing_efficiency = 0.0;
+
+  static constexpr int64_t kCount = 4;
+
+  void Export(std::vector<double>* v) const {
+    double vs[] = {
+        slog(mwp),
+        slog(cwp),
+        slog(bank_conflict_ratio),
+        slog(coalescing_efficiency),
+    };
+    v->insert(v->end(), std::begin(vs), std::end(vs));
+  }
+
+  explicit Feature(const LoopNest& loop_nest, bool is_gpu,
+                   const group1::Feature::ArithOps& arith_ops,
+                   const std::vector<group2::Feature::SubFeature>& sub_features,
+                   int64_t num_sm = 80) {
+    if (!is_gpu) {
+      return;
+    }
+
+    // GPU architecture constants
+    constexpr int64_t kWarpSize = 32;
+    constexpr double kGlobalMemLatency = 400.0;  // cycles
+    constexpr double kSharedMemLatency = 20.0;   // cycles
+    constexpr double kMemIssueInterval = 4.0;    // cycles between memory ops
+    constexpr double kCompIssueInterval = 1.0;   // cycles between compute ops
+    constexpr int64_t kNumBanks = 32;            // shared memory banks
+
+    // Calculate thread block size
+    int64_t thread_block_size = 1;
+    thread_block_size *= utils::FirstLoopExtent(loop_nest.threadIdx_x, 1);
+    thread_block_size *= utils::FirstLoopExtent(loop_nest.threadIdx_y, 1);
+    thread_block_size *= utils::FirstLoopExtent(loop_nest.threadIdx_z, 1);
+
+    int64_t num_warps = (thread_block_size + kWarpSize - 1) / kWarpSize;
+
+    // Count memory operations
+    double global_mem_ops = 0.0;
+    double shared_mem_ops = 0.0;
+    double total_shared_accesses = 0.0;
+
+    for (const auto& sub : sub_features) {
+      if (sub.buffer) {
+        ffi::String buffer_scope = ffi::GetRef<Buffer>(sub.buffer).scope();
+        if (buffer_scope == "" || buffer_scope == "global") {
+          global_mem_ops += sub.unique_bytes / 4.0;  // Assume 4-byte elements
+        } else if (buffer_scope == "shared") {
+          shared_mem_ops += sub.unique_bytes / 4.0;
+          total_shared_accesses += sub.unique_bytes / 4.0;
+        }
+      }
+    }
+
+    // Calculate total compute operations
+    double total_comp_ops = static_cast<double>(
+        arith_ops.float_mad + arith_ops.float_add_sub + arith_ops.float_mul +
+        arith_ops.int_mad + arith_ops.int_add_sub + arith_ops.int_mul);
+
+    // 1. MWP (Memory Warp Parallelism)
+    // MWP = min(active_warps, mem_latency / mem_issue_interval)
+    double mem_ops = global_mem_ops + shared_mem_ops;
+    if (mem_ops > 0 && num_warps > 0) {
+      double avg_mem_latency = (global_mem_ops * kGlobalMemLatency +
+                                shared_mem_ops * kSharedMemLatency) / mem_ops;
+      double mwp_limit = avg_mem_latency / kMemIssueInterval;
+      mwp = std::min(static_cast<double>(num_warps), mwp_limit);
+    }
+
+    // 2. CWP (Compute Warp Parallelism)
+    // CWP = comp_cycles / issue_cycles
+    if (total_comp_ops > 0 && num_warps > 0) {
+      double comp_cycles_per_warp = total_comp_ops / num_warps;
+      cwp = comp_cycles_per_warp / kCompIssueInterval;
+    }
+
+    // 3. Bank Conflict Ratio (simplified estimate)
+    // Estimate based on access stride patterns
+    if (total_shared_accesses > 0) {
+      // Heuristic: check if threadIdx.x extent is a multiple of 32
+      int64_t threadIdx_x_extent = utils::FirstLoopExtent(loop_nest.threadIdx_x, 1);
+      if (threadIdx_x_extent > 0 && threadIdx_x_extent % kNumBanks == 0) {
+        bank_conflict_ratio = 0.0;  // Likely no conflicts
+      } else if (threadIdx_x_extent > 0) {
+        // Estimate conflict ratio based on stride
+        bank_conflict_ratio = 1.0 - (1.0 / std::min(threadIdx_x_extent, kNumBanks));
+      }
+    }
+
+    // 4. Coalescing Efficiency (simplified estimate)
+    // Perfect coalescing when consecutive threads access consecutive memory
+    if (global_mem_ops > 0) {
+      int64_t threadIdx_x_extent = utils::FirstLoopExtent(loop_nest.threadIdx_x, 1);
+      if (threadIdx_x_extent >= kWarpSize) {
+        coalescing_efficiency = 1.0;  // Likely coalesced
+      } else if (threadIdx_x_extent > 0) {
+        coalescing_efficiency = static_cast<double>(threadIdx_x_extent) / kWarpSize;
+      }
+    }
+  }
+};
+
+}  // namespace group8
+
 /*! \brief The feature extracted */
 struct Feature {
   const BufferNode* buffer = nullptr;
@@ -1489,6 +1613,7 @@ struct Feature {
   std::unique_ptr<group5::Feature> group5 = nullptr;
   std::shared_ptr<group6::Feature> group6 = nullptr;
   std::unique_ptr<group7::Feature> group7 = nullptr;
+  std::unique_ptr<group8::Feature> group8 = nullptr;
 
   bool operator<(const Feature& other) const { return buffer_order < other.buffer_order; }
 };
@@ -1554,6 +1679,9 @@ class PerStoreFeatureCollector : private StmtVisitor {
                                           for_touched_bytes_, feature.group1->arith_ops);
     feature.group5 = std::make_unique<group5::Feature>(loop_nest_);
     feature.group7 = std::make_unique<group7::Feature>(loop_nest_, is_gpu_,
+                                                        feature.group1->arith_ops,
+                                                        feature.group2->sub_features);
+    feature.group8 = std::make_unique<group8::Feature>(loop_nest_, is_gpu_,
                                                         feature.group1->arith_ops,
                                                         feature.group2->sub_features);
   }
@@ -1629,6 +1757,9 @@ class PerStoreFeatureNode : public FeatureExtractorNode {
       feature.group5->Export(&result);
       if (feature.group7) {
         feature.group7->Export(&result);
+      }
+      if (feature.group8) {
+        feature.group8->Export(&result);
       }
     }
   }
