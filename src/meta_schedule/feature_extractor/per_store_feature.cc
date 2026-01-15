@@ -1513,8 +1513,7 @@ struct Feature {
 
   explicit Feature(const LoopNest& loop_nest, bool is_gpu,
                    const group1::Feature::ArithOps& arith_ops,
-                   const std::vector<group2::Feature::SubFeature>& sub_features,
-                   int64_t num_sm = 80) {
+                   const std::vector<group2::Feature::SubFeature>& sub_features) {
     if (!is_gpu) {
       return;
     }
@@ -1526,16 +1525,53 @@ struct Feature {
     constexpr double kMemIssueInterval = 4.0;    // cycles between memory ops
     constexpr double kCompIssueInterval = 1.0;   // cycles between compute ops
     constexpr int64_t kNumBanks = 32;            // shared memory banks
+    constexpr int64_t kMaxWarpsPerSM = 64;       // max warps per SM
+    constexpr int64_t kMaxBlocksPerSM = 32;      // max blocks per SM
+    constexpr int64_t kMaxSharedMemoryPerSM = 49152;  // 48KB
+    constexpr int64_t kMaxRegistersPerSM = 65536;
 
-    // Calculate thread block size
-    int64_t thread_block_size = 1;
-    thread_block_size *= utils::FirstLoopExtent(loop_nest.threadIdx_x, 1);
-    thread_block_size *= utils::FirstLoopExtent(loop_nest.threadIdx_y, 1);
-    thread_block_size *= utils::FirstLoopExtent(loop_nest.threadIdx_z, 1);
+    // Calculate thread block dimensions
+    int64_t threadIdx_x_extent = utils::FirstLoopExtent(loop_nest.threadIdx_x, 1);
+    int64_t threadIdx_y_extent = utils::FirstLoopExtent(loop_nest.threadIdx_y, 1);
+    int64_t threadIdx_z_extent = utils::FirstLoopExtent(loop_nest.threadIdx_z, 1);
+    int64_t thread_block_size = threadIdx_x_extent * threadIdx_y_extent * threadIdx_z_extent;
 
-    int64_t num_warps = (thread_block_size + kWarpSize - 1) / kWarpSize;
+    int64_t warps_per_block = (thread_block_size + kWarpSize - 1) / kWarpSize;
 
-    // Count memory operations
+    // Calculate blocks per SM (same logic as group7)
+    int64_t blocks_per_sm = kMaxBlocksPerSM;
+    if (warps_per_block > 0) {
+      blocks_per_sm = std::min(blocks_per_sm, kMaxWarpsPerSM / warps_per_block);
+    }
+
+    // Account for shared memory limit
+    int64_t total_shared = 0;
+    for (const auto& sub : sub_features) {
+      if (sub.buffer && ffi::GetRef<Buffer>(sub.buffer).scope() == "shared") {
+        int64_t buffer_size = 1;
+        for (const auto& shape_dim : sub.buffer->shape) {
+          if (const IntImmNode* imm = shape_dim.as<IntImmNode>()) {
+            buffer_size *= imm->value;
+          }
+        }
+        total_shared += buffer_size * sub.buffer->dtype.bytes();
+      }
+    }
+    if (total_shared > 0) {
+      blocks_per_sm = std::min(blocks_per_sm, kMaxSharedMemoryPerSM / total_shared);
+    }
+
+    // Account for register limit (heuristic: 32 regs per thread)
+    int64_t total_registers_per_block = thread_block_size * 32;
+    if (total_registers_per_block > 0) {
+      blocks_per_sm = std::min(blocks_per_sm, kMaxRegistersPerSM / total_registers_per_block);
+    }
+    blocks_per_sm = std::max(blocks_per_sm, int64_t(1));
+
+    // Active warps per SM = warps_per_block * blocks_per_sm
+    int64_t active_warps_per_sm = warps_per_block * blocks_per_sm;
+
+    // Count memory operations using reuse_ct for actual access count
     double global_mem_ops = 0.0;
     double shared_mem_ops = 0.0;
     double total_shared_accesses = 0.0;
@@ -1543,11 +1579,17 @@ struct Feature {
     for (const auto& sub : sub_features) {
       if (sub.buffer) {
         ffi::String buffer_scope = ffi::GetRef<Buffer>(sub.buffer).scope();
+        // Use reuse_ct to get actual memory access count, not just unique bytes
+        // Each reuse represents one access to the buffer
+        double access_count = std::max(1.0, static_cast<double>(sub.reuse_ct));
+        double elem_count = sub.unique_bytes / 4.0;  // Assume 4-byte elements
+        double actual_ops = elem_count * access_count;
+
         if (buffer_scope == "" || buffer_scope == "global") {
-          global_mem_ops += sub.unique_bytes / 4.0;  // Assume 4-byte elements
+          global_mem_ops += actual_ops;
         } else if (buffer_scope == "shared") {
-          shared_mem_ops += sub.unique_bytes / 4.0;
-          total_shared_accesses += sub.unique_bytes / 4.0;
+          shared_mem_ops += actual_ops;
+          total_shared_accesses += actual_ops;
         }
       }
     }
@@ -1557,44 +1599,69 @@ struct Feature {
         arith_ops.float_mad + arith_ops.float_add_sub + arith_ops.float_mul +
         arith_ops.int_mad + arith_ops.int_add_sub + arith_ops.int_mul);
 
-    // 1. MWP (Memory Warp Parallelism)
-    // MWP = min(active_warps, mem_latency / mem_issue_interval)
+    // 1. MWP (Memory Warp Parallelism) - Hong & Kim ISCA 2009
+    // MWP = min(active_warps_per_SM, mem_latency / mem_issue_interval)
     double mem_ops = global_mem_ops + shared_mem_ops;
-    if (mem_ops > 0 && num_warps > 0) {
+    if (mem_ops > 0 && active_warps_per_sm > 0) {
       double avg_mem_latency = (global_mem_ops * kGlobalMemLatency +
                                 shared_mem_ops * kSharedMemLatency) / mem_ops;
       double mwp_limit = avg_mem_latency / kMemIssueInterval;
-      mwp = std::min(static_cast<double>(num_warps), mwp_limit);
+      mwp = std::min(static_cast<double>(active_warps_per_sm), mwp_limit);
     }
 
     // 2. CWP (Compute Warp Parallelism)
     // CWP = comp_cycles / issue_cycles
-    if (total_comp_ops > 0 && num_warps > 0) {
-      double comp_cycles_per_warp = total_comp_ops / num_warps;
+    if (total_comp_ops > 0 && active_warps_per_sm > 0) {
+      double comp_cycles_per_warp = total_comp_ops / active_warps_per_sm;
       cwp = comp_cycles_per_warp / kCompIssueInterval;
     }
 
-    // 3. Bank Conflict Ratio (simplified estimate)
-    // Estimate based on access stride patterns
-    if (total_shared_accesses > 0) {
-      // Heuristic: check if threadIdx.x extent is a multiple of 32
-      int64_t threadIdx_x_extent = utils::FirstLoopExtent(loop_nest.threadIdx_x, 1);
-      if (threadIdx_x_extent > 0 && threadIdx_x_extent % kNumBanks == 0) {
-        bank_conflict_ratio = 0.0;  // Likely no conflicts
+    // 3. Bank Conflict Ratio (improved: handle 2D/3D thread blocks)
+    // Model linear thread index within warp for bank conflict estimation
+    if (total_shared_accesses > 0 && thread_block_size > 0) {
+      // For bank conflicts, we care about how threads within a warp access shared memory
+      // If threadIdx.x >= 32, threads in a warp have consecutive x indices (good for coalescing)
+      // If threadIdx.x < 32, multiple y/z slices are in one warp (potential conflicts)
+
+      if (threadIdx_x_extent >= kWarpSize) {
+        // Full warp width in x-dimension: consecutive x threads access memory
+        // Likely no bank conflicts if accessing with unit stride in x
+        bank_conflict_ratio = 0.0;
       } else if (threadIdx_x_extent > 0) {
-        // Estimate conflict ratio based on stride
-        bank_conflict_ratio = 1.0 - (1.0 / std::min(threadIdx_x_extent, kNumBanks));
+        // Partial warp in x: threads from different y/z slices share the warp
+        // Estimate conflict based on how many y/z threads share a warp
+        int64_t threads_per_warp_row = threadIdx_x_extent;
+        int64_t y_threads_in_warp = std::min(
+            threadIdx_y_extent, (kWarpSize + threads_per_warp_row - 1) / threads_per_warp_row);
+
+        // If y_threads_in_warp > 1 and they access same bank, conflicts occur
+        // Heuristic: conflict ratio ~ 1 - 1/y_threads_in_warp
+        if (y_threads_in_warp > 1) {
+          bank_conflict_ratio = 1.0 - (1.0 / y_threads_in_warp);
+        } else {
+          bank_conflict_ratio = 0.0;
+        }
       }
     }
 
-    // 4. Coalescing Efficiency (simplified estimate)
-    // Perfect coalescing when consecutive threads access consecutive memory
-    if (global_mem_ops > 0) {
-      int64_t threadIdx_x_extent = utils::FirstLoopExtent(loop_nest.threadIdx_x, 1);
+    // 4. Coalescing Efficiency (improved: handle 2D/3D thread blocks)
+    // Perfect coalescing when warp threads (linear IDs 0-31) access consecutive addresses
+    if (global_mem_ops > 0 && thread_block_size > 0) {
+      // Coalescing depends on how the innermost dimension maps to thread indices
+      // Best case: threadIdx.x >= 32 and memory access is contiguous in x
+
       if (threadIdx_x_extent >= kWarpSize) {
-        coalescing_efficiency = 1.0;  // Likely coalesced
+        // Threads 0-31 have consecutive x indices: perfect coalescing potential
+        coalescing_efficiency = 1.0;
       } else if (threadIdx_x_extent > 0) {
-        coalescing_efficiency = static_cast<double>(threadIdx_x_extent) / kWarpSize;
+        // Warp spans multiple y or z values
+        // Coalescing efficiency depends on memory layout vs thread layout
+        // Heuristic: efficiency ~ threadIdx_x_extent / warp_size
+        // But if y dimension also contributes to linear address, may still coalesce
+        int64_t contiguous_threads = threadIdx_x_extent;
+        // If y-strided access matches memory stride, can still coalesce
+        // Conservative estimate: partial coalescing
+        coalescing_efficiency = static_cast<double>(contiguous_threads) / kWarpSize;
       }
     }
   }
@@ -1805,7 +1872,8 @@ FeatureExtractor FeatureExtractor::PerStoreFeature(int buffers_per_store,
                              arith_intensity_curve_num_samples +                             //
                              tir::group4::Feature::kCount +                                  //
                              tir::group5::Feature::kCount +                                  //
-                             tir::group7::Feature::kCount;  // GPU performance metrics
+                             tir::group7::Feature::kCount +                                  //
+                             tir::group8::Feature::kCount;  // GPU performance metrics (group7 + group8)
   if (extract_workload) {
     n->feature_vector_length += tir::group6::Feature::kCount;
   }
